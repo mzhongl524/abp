@@ -18,6 +18,11 @@ namespace Volo.Abp.Http.Client.DynamicProxying
 
         protected IApiDescriptionCache Cache { get; }
 
+        private static readonly JsonSerializerSettings SharedJsonSerializerSettings = new JsonSerializerSettings
+        {
+            ContractResolver = new CamelCasePropertyNamesContractResolver()
+        };
+
         public ApiDescriptionFinder(
             IApiDescriptionCache cache, 
             IDynamicProxyHttpClientFactory httpClientFactory)
@@ -87,18 +92,14 @@ namespace Volo.Abp.Http.Client.DynamicProxying
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    throw new AbpException("Remote service returns error!");
+                    throw new AbpException("Remote service returns error! StatusCode = " + response.StatusCode);
                 }
 
                 var content = await response.Content.ReadAsStringAsync();
 
                 var result = JsonConvert.DeserializeObject(
                     content,
-                    typeof(ApplicationApiDescriptionModel),
-                    new JsonSerializerSettings
-                    {
-                        ContractResolver = new CamelCasePropertyNamesContractResolver()
-                    });
+                    typeof(ApplicationApiDescriptionModel), SharedJsonSerializerSettings);
 
                 return (ApplicationApiDescriptionModel)result;
             }

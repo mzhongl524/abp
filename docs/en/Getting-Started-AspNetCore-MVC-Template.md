@@ -1,6 +1,6 @@
 ## Getting Started With the ASP.NET Core MVC Template
 
-This tutorials explains how to create a new ASP.NET Core MVC web application using the startup template, configure and run it.
+This tutorial explains how to create a new ASP.NET Core MVC web application using the startup template, configure and run it.
 
 ### Creating a New Project
 
@@ -26,8 +26,10 @@ abp new Acme.BookStore
 
 The created solution requires;
 
-* [Visual Studio 2017 (v15.9.0+)](https://visualstudio.microsoft.com/tr/downloads/)
-* [.NET Core 2.2+](https://www.microsoft.com/net/download/dotnet-core/)
+* [Visual Studio 2019 (v16.3+)](https://visualstudio.microsoft.com/vs/)
+* [.NET Core 3.0+](https://www.microsoft.com/net/download/dotnet-core/)
+* [Node v12+](https://nodejs.org)
+* [Yarn v1.19+](https://yarnpkg.com/)
 
 ### The Solution Structure
 
@@ -37,7 +39,7 @@ Open the solution in **Visual Studio**:
 
 The solution has a layered structure (based on [Domain Driven Design](Domain-Driven-Design.md)) and contains unit & integration test projects properly configured to work with **EF Core** & **SQLite in-memory** database.
 
-> See [MVC application template document](Startup-Templates/Mvc.md) to understand the solution structure in details.
+> See [Application template document](Startup-Templates/Application.md) to understand the solution structure in details.
 
 ### Database Connection String
 

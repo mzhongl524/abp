@@ -11,22 +11,22 @@ namespace Volo.Abp.EventBus.Distributed
 {
     [Dependency(TryRegister = true)]
     [ExposeServices(typeof(IDistributedEventBus), typeof(LocalDistributedEventBus))]
-    public class LocalDistributedEventBus : IDistributedEventBus, ITransientDependency
+    public class LocalDistributedEventBus : IDistributedEventBus, ISingletonDependency
     {
         private readonly ILocalEventBus _localEventBus;
 
         protected IServiceScopeFactory ServiceScopeFactory { get; }
 
-        protected DistributedEventBusOptions DistributedEventBusOptions { get; }
+        protected AbpDistributedEventBusOptions AbpDistributedEventBusOptions { get; }
 
         public LocalDistributedEventBus(
             ILocalEventBus localEventBus,
             IServiceScopeFactory serviceScopeFactory,
-            IOptions<DistributedEventBusOptions> distributedEventBusOptions)
+            IOptions<AbpDistributedEventBusOptions> distributedEventBusOptions)
         {
             _localEventBus = localEventBus;
             ServiceScopeFactory = serviceScopeFactory;
-            DistributedEventBusOptions = distributedEventBusOptions.Value;
+            AbpDistributedEventBusOptions = distributedEventBusOptions.Value;
             Subscribe(distributedEventBusOptions.Value.Handlers);
         }
 
