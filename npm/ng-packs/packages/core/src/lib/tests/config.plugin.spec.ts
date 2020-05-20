@@ -1,13 +1,13 @@
 import { RouterTestingModule } from '@angular/router/testing';
 import { createServiceFactory, SpectatorService } from '@ngneat/spectator/jest';
-import { NgxsModule, NGXS_PLUGINS, Store } from '@ngxs/store';
+import { NgxsModule, Store } from '@ngxs/store';
+import { OAuthModule } from 'angular-oauth2-oidc';
 import { environment } from '../../../../../apps/dev-app/src/environments/environment';
-import { LAYOUTS } from '@abp/ng.theme.basic';
 import { RouterOutletComponent } from '../components';
 import { CoreModule } from '../core.module';
 import { eLayoutType } from '../enums/common';
 import { ABP } from '../models';
-import { ConfigPlugin, NGXS_CONFIG_PLUGIN_OPTIONS } from '../plugins';
+import { ConfigPlugin } from '../plugins';
 import { ConfigState } from '../states';
 import { addAbpRoutes } from '../utils';
 
@@ -59,9 +59,6 @@ addAbpRoutes([
 
 const expectedState = {
   environment,
-  requirements: {
-    layouts: LAYOUTS,
-  },
   routes: [
     {
       name: '::Menu:Home',
@@ -322,8 +319,9 @@ describe('ConfigPlugin', () => {
   const createService = createServiceFactory({
     service: ConfigPlugin,
     imports: [
-      CoreModule,
-      NgxsModule.forRoot([]),
+      NgxsModule.forRoot([ConfigState]),
+      CoreModule.forRoot({ environment }),
+      OAuthModule.forRoot(),
       RouterTestingModule.withRoutes([
         {
           path: '',
@@ -338,17 +336,6 @@ describe('ConfigPlugin', () => {
         { path: 'account', component: RouterOutletComponent },
         { path: 'tenant-management', component: RouterOutletComponent },
       ]),
-    ],
-    providers: [
-      {
-        provide: NGXS_PLUGINS,
-        useClass: ConfigPlugin,
-        multi: true,
-      },
-      {
-        provide: NGXS_CONFIG_PLUGIN_OPTIONS,
-        useValue: { environment, requirements: { layouts: LAYOUTS } } as ABP.Root,
-      },
     ],
   });
 

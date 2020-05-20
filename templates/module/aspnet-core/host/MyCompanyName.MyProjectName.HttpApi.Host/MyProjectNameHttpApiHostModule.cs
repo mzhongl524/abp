@@ -1,6 +1,9 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Claims;
+using IdentityModel;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.DataProtection;
@@ -14,6 +17,8 @@ using Swashbuckle.AspNetCore.Swagger;
 using Volo.Abp;
 using Volo.Abp.AspNetCore.MultiTenancy;
 using Volo.Abp.AspNetCore.Mvc.UI.MultiTenancy;
+using Volo.Abp.AspNetCore.Mvc.UI.Theme.Shared;
+using Volo.Abp.AspNetCore.Serilog;
 using Volo.Abp.AuditLogging.EntityFrameworkCore;
 using Volo.Abp.Autofac;
 using Volo.Abp.Caching;
@@ -23,6 +28,7 @@ using Volo.Abp.Localization;
 using Volo.Abp.Modularity;
 using Volo.Abp.MultiTenancy;
 using Volo.Abp.PermissionManagement.EntityFrameworkCore;
+using Volo.Abp.Security.Claims;
 using Volo.Abp.SettingManagement.EntityFrameworkCore;
 using Volo.Abp.VirtualFileSystem;
 
@@ -37,7 +43,8 @@ namespace MyCompanyName.MyProjectName
         typeof(AbpEntityFrameworkCoreSqlServerModule),
         typeof(AbpAuditLoggingEntityFrameworkCoreModule),
         typeof(AbpPermissionManagementEntityFrameworkCoreModule),
-        typeof(AbpSettingManagementEntityFrameworkCoreModule)
+        typeof(AbpSettingManagementEntityFrameworkCoreModule),
+        typeof(AbpAspNetCoreSerilogModule)
         )]
     public class MyProjectNameHttpApiHostModule : AbpModule
     {
@@ -82,9 +89,17 @@ namespace MyCompanyName.MyProjectName
                 options.Languages.Add(new LanguageInfo("cs", "cs", "Čeština"));
                 options.Languages.Add(new LanguageInfo("en", "en", "English"));
                 options.Languages.Add(new LanguageInfo("pt-BR", "pt-BR", "Português"));
+                options.Languages.Add(new LanguageInfo("ru", "ru", "Русский"));
                 options.Languages.Add(new LanguageInfo("tr", "tr", "Türkçe"));
                 options.Languages.Add(new LanguageInfo("zh-Hans", "zh-Hans", "简体中文"));
+                options.Languages.Add(new LanguageInfo("zh-Hant", "zh-Hant", "繁體中文"));
             });
+
+            //Updates AbpClaimTypes to be compatible with identity server claims.
+            AbpClaimTypes.UserId = JwtClaimTypes.Subject;
+            AbpClaimTypes.UserName = JwtClaimTypes.Name;
+            AbpClaimTypes.Role = JwtClaimTypes.Role;
+            AbpClaimTypes.Email = JwtClaimTypes.Email;
 
             context.Services.AddAuthentication("Bearer")
                 .AddIdentityServerAuthentication(options =>
@@ -135,30 +150,53 @@ namespace MyCompanyName.MyProjectName
         public override void OnApplicationInitialization(ApplicationInitializationContext context)
         {
             var app = context.GetApplicationBuilder();
+            var env = context.GetEnvironment();
 
-            if (!context.GetEnvironment().IsDevelopment())
+            if (env.IsDevelopment())
             {
+                app.UseDeveloperExceptionPage();
+            }
+            else
+            {
+                app.UseErrorPage();
                 app.UseHsts();
             }
+
             app.UseHttpsRedirection();
             app.UseCorrelationId();
             app.UseVirtualFiles();
             app.UseRouting();
-            app.UseCors(DefaultCorsPolicyName);
+            app.UseCors(DefaultCorsPolicyName);        
             app.UseAuthentication();
-            app.UseAuthorization();
+
             if (MultiTenancyConsts.IsEnabled)
             {
                 app.UseMultiTenancy();
             }
+            app.Use(async (ctx, next) =>
+            {
+                var currentPrincipalAccessor = ctx.RequestServices.GetRequiredService<ICurrentPrincipalAccessor>();
+                var map = new Dictionary<string, string>()
+                {
+                    { "sub", AbpClaimTypes.UserId },
+                    { "role", AbpClaimTypes.Role },
+                    { "email", AbpClaimTypes.Email },
+                    //any other map
+                };
+                var mapClaims = currentPrincipalAccessor.Principal.Claims.Where(p => map.Keys.Contains(p.Type)).ToList();
+                currentPrincipalAccessor.Principal.AddIdentity(new ClaimsIdentity(mapClaims.Select(p => new Claim(map[p.Type], p.Value, p.ValueType, p.Issuer))));
+                await next();
+            });
             app.UseAbpRequestLocalization();
+            app.UseAuthorization();
             app.UseSwagger();
             app.UseSwaggerUI(options =>
             {
                 options.SwaggerEndpoint("/swagger/v1/swagger.json", "Support APP API");
             });
             app.UseAuditing();
-            app.UseMvcWithDefaultRouteAndArea();
+            app.UseAbpSerilogEnrichers();
+            app.UseConfiguredEndpoints();
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Cors;
@@ -11,11 +11,14 @@ using StackExchange.Redis;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.Swagger;
 using Volo.Abp;
+using Volo.Abp.Account;
 using Volo.Abp.Account.Web;
 using Volo.Abp.AspNetCore.Authentication.JwtBearer;
 using Volo.Abp.AspNetCore.Mvc;
 using Volo.Abp.AspNetCore.Mvc.UI.MultiTenancy;
 using Volo.Abp.AspNetCore.Mvc.UI.Theme.Basic;
+using Volo.Abp.AspNetCore.Mvc.UI.Theme.Shared;
+using Volo.Abp.AspNetCore.Serilog;
 using Volo.Abp.Auditing;
 using Volo.Abp.AuditLogging.EntityFrameworkCore;
 using Volo.Abp.Autofac;
@@ -44,6 +47,7 @@ namespace MyCompanyName.MyProjectName
 {
     [DependsOn(
         typeof(AbpAccountWebIdentityServerModule),
+        typeof(AbpAccountApplicationModule),
         typeof(AbpAspNetCoreMvcUiMultiTenancyModule),
         typeof(AbpAspNetCoreMvcModule),
         typeof(AbpAspNetCoreMvcUiBasicThemeModule),
@@ -64,7 +68,8 @@ namespace MyCompanyName.MyProjectName
         typeof(AbpTenantManagementApplicationModule),
         typeof(AbpTenantManagementHttpApiModule),
         typeof(AbpAspNetCoreAuthenticationJwtBearerModule),
-        typeof(MyProjectNameApplicationContractsModule)
+        typeof(MyProjectNameApplicationContractsModule),
+        typeof(AbpAspNetCoreSerilogModule)
         )]
     public class MyProjectNameIdentityServerModule : AbpModule
     {
@@ -93,8 +98,10 @@ namespace MyCompanyName.MyProjectName
                 options.Languages.Add(new LanguageInfo("cs", "cs", "Čeština"));
                 options.Languages.Add(new LanguageInfo("en", "en", "English"));
                 options.Languages.Add(new LanguageInfo("pt-BR", "pt-BR", "Português"));
+                options.Languages.Add(new LanguageInfo("ru", "ru", "Русский"));
                 options.Languages.Add(new LanguageInfo("tr", "tr", "Türkçe"));
                 options.Languages.Add(new LanguageInfo("zh-Hans", "zh-Hans", "简体中文"));
+                options.Languages.Add(new LanguageInfo("zh-Hant", "zh-Hant", "繁體中文"));
             });
 
             Configure<AbpAuditingOptions>(options =>
@@ -162,32 +169,42 @@ namespace MyCompanyName.MyProjectName
         public override void OnApplicationInitialization(ApplicationInitializationContext context)
         {
             var app = context.GetApplicationBuilder();
+            var env = context.GetEnvironment();
 
-            if (!context.GetEnvironment().IsDevelopment())
+            if (env.IsDevelopment())
             {
+                app.UseDeveloperExceptionPage();
+            }
+            else
+            {
+                app.UseErrorPage();
                 app.UseHsts();
             }
+
             app.UseHttpsRedirection();
             app.UseCorrelationId();
             app.UseVirtualFiles();
             app.UseRouting();
-            app.UseCors(DefaultCorsPolicyName);
+            app.UseCors(DefaultCorsPolicyName); 
             app.UseAuthentication();
             app.UseJwtTokenMiddleware();
+            
             if (MultiTenancyConsts.IsEnabled)
             {
                 app.UseMultiTenancy();
             }
+
+            app.UseAbpRequestLocalization();
             app.UseIdentityServer();
             app.UseAuthorization();
-            app.UseAbpRequestLocalization();
             app.UseSwagger();
             app.UseSwaggerUI(options =>
             {
                 options.SwaggerEndpoint("/swagger/v1/swagger.json", "Support APP API");
             });
             app.UseAuditing();
-            app.UseMvcWithDefaultRouteAndArea();
+            app.UseAbpSerilogEnrichers();
+            app.UseConfiguredEndpoints();
 
             SeedData(context);
         }

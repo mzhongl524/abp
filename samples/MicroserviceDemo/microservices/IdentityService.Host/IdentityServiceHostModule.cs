@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Builder;
@@ -6,8 +6,10 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using Microsoft.OpenApi.Models;
-using Swashbuckle.AspNetCore.Swagger;
+using MsDemo.Shared;
 using Volo.Abp;
+using Volo.Abp.AspNetCore.MultiTenancy;
+using Volo.Abp.AspNetCore.Mvc;
 using Volo.Abp.Auditing;
 using Volo.Abp.AuditLogging.EntityFrameworkCore;
 using Volo.Abp.Autofac;
@@ -18,14 +20,17 @@ using Volo.Abp.Identity;
 using Volo.Abp.Identity.EntityFrameworkCore;
 using Volo.Abp.Localization;
 using Volo.Abp.Modularity;
+using Volo.Abp.MultiTenancy;
 using Volo.Abp.PermissionManagement.EntityFrameworkCore;
 using Volo.Abp.Security.Claims;
 using Volo.Abp.SettingManagement.EntityFrameworkCore;
+using Volo.Abp.TenantManagement.EntityFrameworkCore;
 
 namespace IdentityService.Host
 {
     [DependsOn(
         typeof(AbpAutofacModule),
+        typeof(AbpAspNetCoreMvcModule),
         typeof(AbpEventBusRabbitMqModule),
         typeof(AbpEntityFrameworkCoreSqlServerModule),
         typeof(AbpAuditLoggingEntityFrameworkCoreModule),
@@ -33,13 +38,20 @@ namespace IdentityService.Host
         typeof(AbpSettingManagementEntityFrameworkCoreModule),
         typeof(AbpIdentityHttpApiModule),
         typeof(AbpIdentityEntityFrameworkCoreModule),
-        typeof(AbpIdentityApplicationModule)
+        typeof(AbpIdentityApplicationModule),
+        typeof(AbpAspNetCoreMultiTenancyModule),
+        typeof(AbpTenantManagementEntityFrameworkCoreModule)
         )]
     public class IdentityServiceHostModule : AbpModule
     {
         public override void ConfigureServices(ServiceConfigurationContext context)
         {
             var configuration = context.Services.GetConfiguration();
+
+            Configure<AbpMultiTenancyOptions>(options =>
+            {
+                options.IsEnabled = MsDemoConsts.IsMultiTenancyEnabled;
+            });
 
             context.Services.AddAuthentication("Bearer")
                 .AddIdentityServerAuthentication(options =>
@@ -91,6 +103,11 @@ namespace IdentityService.Host
             app.UseRouting();
             app.UseAuthentication();
 
+            if (MsDemoConsts.IsMultiTenancyEnabled)
+            {
+                app.UseMultiTenancy();
+            }
+            
             app.Use(async (ctx, next) =>
             {
                 var currentPrincipalAccessor = ctx.RequestServices.GetRequiredService<ICurrentPrincipalAccessor>();
@@ -105,7 +122,6 @@ namespace IdentityService.Host
                 currentPrincipalAccessor.Principal.AddIdentity(new ClaimsIdentity(mapClaims.Select(p => new Claim(map[p.Type], p.Value, p.ValueType, p.Issuer))));
                 await next();
             });
-
             app.UseAbpRequestLocalization(); //TODO: localization?
             app.UseSwagger();
             app.UseSwaggerUI(options =>
@@ -113,7 +129,7 @@ namespace IdentityService.Host
                 options.SwaggerEndpoint("/swagger/v1/swagger.json", "Identity Service API");
             });
             app.UseAuditing();
-            app.UseMvcWithDefaultRouteAndArea();
+            app.UseConfiguredEndpoints();
         }
     }
 }

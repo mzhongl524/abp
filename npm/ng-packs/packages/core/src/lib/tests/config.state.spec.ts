@@ -1,12 +1,13 @@
 import { createServiceFactory, SpectatorService, SpyObject } from '@ngneat/spectator/jest';
 import { Store } from '@ngxs/store';
-import { ReplaySubject, timer, Subject, of } from 'rxjs';
+import clone from 'just-clone';
+import { of, ReplaySubject, timer } from 'rxjs';
+import { AddRoute, PatchRouteByName, SetLanguage } from '../actions';
+import { ABP } from '../models';
 import { Config } from '../models/config';
 import { ApplicationConfigurationService, ConfigStateService } from '../services';
 import { ConfigState } from '../states';
-import { SetLanguage, PatchRouteByName, AddRoute } from '../actions';
-import clone from 'just-clone';
-import { ABP } from '../models';
+import { HttpClient } from '@angular/common/http';
 
 export const CONFIG_STATE_DATA = {
   environment: {
@@ -104,6 +105,26 @@ export const CONFIG_STATE_DATA = {
         flagIcon: null,
       },
     ],
+    currentCulture: {
+      displayName: 'English',
+      englishName: 'English',
+      threeLetterIsoLanguageName: 'eng',
+      twoLetterIsoLanguageName: 'en',
+      isRightToLeft: false,
+      cultureName: 'en',
+      name: 'en',
+      nativeName: 'English',
+      dateTimeFormat: {
+        calendarAlgorithmType: 'SolarCalendar',
+        dateTimeFormatLong: 'dddd, MMMM d, yyyy',
+        shortDatePattern: 'M/d/yyyy',
+        fullDateTimePattern: 'dddd, MMMM d, yyyy h:mm:ss tt',
+        dateSeparator: '/',
+        shortTimePattern: 'h:mm tt',
+        longTimePattern: 'h:mm:ss tt',
+      },
+    },
+    defaultResourceName: null,
   },
   auth: {
     policies: {
@@ -116,6 +137,7 @@ export const CONFIG_STATE_DATA = {
   },
   setting: {
     values: {
+      'Abp.Custom.SomeSetting': 'X',
       'Abp.Localization.DefaultLanguage': 'en',
     },
   },
@@ -124,6 +146,7 @@ export const CONFIG_STATE_DATA = {
     id: null,
     tenantId: null,
     userName: null,
+    email: null,
   },
   features: {
     values: {},
@@ -135,19 +158,17 @@ describe('ConfigState', () => {
   let store: SpyObject<Store>;
   let service: ConfigStateService;
   let state: ConfigState;
-  let appConfigService: SpyObject<ApplicationConfigurationService>;
 
   const createService = createServiceFactory({
     service: ConfigStateService,
-    mocks: [ApplicationConfigurationService, Store],
+    mocks: [ApplicationConfigurationService, Store, HttpClient],
   });
 
   beforeEach(() => {
     spectator = createService();
     store = spectator.get(Store);
     service = spectator.service;
-    appConfigService = spectator.get(ApplicationConfigurationService);
-    state = new ConfigState(spectator.get(ApplicationConfigurationService), store);
+    state = new ConfigState(spectator.get(HttpClient), store);
   });
 
   describe('#getAll', () => {
@@ -218,14 +239,14 @@ describe('ConfigState', () => {
   });
 
   describe('#getSettings', () => {
-    it('should return settings', () => {
-      expect(ConfigState.getSettings('Localization')(CONFIG_STATE_DATA)).toEqual({
-        'Abp.Localization.DefaultLanguage': 'en',
-      });
-
-      expect(ConfigState.getSettings('AllSettings')(CONFIG_STATE_DATA)).toEqual(
-        CONFIG_STATE_DATA.setting.values,
-      );
+    test.each`
+      keyword           | expected
+      ${undefined}      | ${CONFIG_STATE_DATA.setting.values}
+      ${'Localization'} | ${{ 'Abp.Localization.DefaultLanguage': 'en' }}
+      ${'X'}            | ${{}}
+      ${'localization'} | ${{}}
+    `('should return $expected when keyword is given as $keyword', ({ keyword, expected }) => {
+      expect(ConfigState.getSettings(keyword)(CONFIG_STATE_DATA)).toEqual(expected);
     });
   });
 
@@ -251,7 +272,7 @@ describe('ConfigState', () => {
       );
 
       expect(ConfigState.getLocalization('AbpIdentity::NoIdentity')(CONFIG_STATE_DATA)).toBe(
-        'AbpIdentity::NoIdentity',
+        'NoIdentity',
       );
 
       expect(
@@ -266,28 +287,26 @@ describe('ConfigState', () => {
         )(CONFIG_STATE_DATA),
       ).toBe('first and second do not match.');
 
-      try {
+      expect(
         ConfigState.getLocalization('::Test')({
           ...CONFIG_STATE_DATA,
           environment: {
             ...CONFIG_STATE_DATA.environment,
             localization: {} as any,
           },
-        });
-        expect(false).toBeTruthy(); // fail
-      } catch (error) {
-        expect((error as Error).message).toContain('Please check your environment');
-      }
+        }),
+      ).toBe('Test');
     });
   });
 
   describe('#GetAppConfiguration', () => {
-    it('should call the getConfiguration of ApplicationConfigurationService and patch the state', done => {
+    it('should call the app-configuration API and patch the state', done => {
       let patchStateArg;
       let dispatchArg;
 
       const configuration = {
         setting: { values: { 'Abp.Localization.DefaultLanguage': 'tr;TR' } },
+        localization: { currentCulture: {} },
       };
 
       const res$ = new ReplaySubject(1);
@@ -298,14 +317,15 @@ describe('ConfigState', () => {
         dispatchArg = a;
         return of(a);
       });
-      appConfigService.getConfiguration.andReturn(res$);
+      const httpClient = spectator.get(HttpClient);
+      httpClient.get.andReturn(res$);
 
       state.addData({ patchState, dispatch } as any).subscribe();
 
       timer(0).subscribe(() => {
         expect(patchStateArg).toEqual(configuration);
         expect(dispatchArg instanceof SetLanguage).toBeTruthy();
-        expect(dispatchArg).toEqual({ payload: 'tr' });
+        expect(dispatchArg).toEqual({ payload: 'tr', dispatchAppConfiguration: false });
         done();
       });
     });
@@ -374,6 +394,7 @@ describe('ConfigState', () => {
   describe('#AddRoute', () => {
     const newRoute = {
       name: 'My new page',
+      children: [],
       iconClass: 'fa fa-dashboard',
       path: 'page',
       invisible: false,

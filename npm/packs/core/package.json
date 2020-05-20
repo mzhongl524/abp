@@ -1,8 +1,11 @@
 {
-  "version": "1.1.1",
+  "version": "2.7.0",
   "name": "@abp/core",
   "publishConfig": {
     "access": "public"
   },
-  "gitHead": "b926d7a3fed6365550493ec00bdfe9da9dd6c541"
+  "dependencies": {
+    "@abp/utils": "^2.7.0"
+  },
+  "gitHead": "0ea3895f3b0b489e3ea81fc88f8f0896b22b61bd"
 }
