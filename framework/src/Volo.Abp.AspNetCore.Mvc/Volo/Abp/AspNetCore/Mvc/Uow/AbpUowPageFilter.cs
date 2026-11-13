@@ -1,105 +1,127 @@
-﻿using System;
-using System.Net.Http;
+using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Options;
-using Volo.Abp.AspNetCore.Uow;
+using Volo.Abp.AspNetCore.Filters;
 using Volo.Abp.DependencyInjection;
+using Volo.Abp.Http;
+using Volo.Abp.Threading;
 using Volo.Abp.Uow;
 
-namespace Volo.Abp.AspNetCore.Mvc.Uow
+namespace Volo.Abp.AspNetCore.Mvc.Uow;
+
+public class AbpUowPageFilter : IAsyncPageFilter, IAbpFilter, ITransientDependency
 {
-    public class AbpUowPageFilter : IAsyncPageFilter, ITransientDependency
+    public Task OnPageHandlerSelectionAsync(PageHandlerSelectedContext context)
     {
-        private readonly IUnitOfWorkManager _unitOfWorkManager;
-        private readonly AbpUnitOfWorkDefaultOptions _defaultOptions;
+        return Task.CompletedTask;
+    }
 
-        public AbpUowPageFilter(IUnitOfWorkManager unitOfWorkManager, IOptions<AbpUnitOfWorkDefaultOptions> options)
+    public async Task OnPageHandlerExecutionAsync(PageHandlerExecutingContext context, PageHandlerExecutionDelegate next)
+    {
+        if (context.HandlerMethod == null || !context.ActionDescriptor.IsPageAction())
         {
-            _unitOfWorkManager = unitOfWorkManager;
-            _defaultOptions = options.Value;
-        }
-        public Task OnPageHandlerSelectionAsync(PageHandlerSelectedContext context)
-        {
-            return Task.CompletedTask;
+            await next();
+            return;
         }
 
-        public async Task OnPageHandlerExecutionAsync(PageHandlerExecutingContext context, PageHandlerExecutionDelegate next)
+        var methodInfo = context.HandlerMethod.MethodInfo;
+        var unitOfWorkAttr = UnitOfWorkHelper.GetUnitOfWorkAttributeOrNull(methodInfo);
+
+        context.HttpContext.Items["_AbpActionInfo"] = new AbpActionInfoInHttpContext
         {
-            if (context.HandlerMethod == null || !context.ActionDescriptor.IsPageAction())
-            {
-                await next();
-                return;
-            }
+            IsObjectResult = ActionResultHelper.IsObjectResult(context.HandlerMethod.MethodInfo.ReturnType, typeof(void))
+        };
 
-            var methodInfo = context.HandlerMethod.MethodInfo;
-            var unitOfWorkAttr = UnitOfWorkHelper.GetUnitOfWorkAttributeOrNull(methodInfo);
-
-            context.HttpContext.Items["_AbpActionInfo"] = new AbpActionInfoInHttpContext
-            {
-                IsObjectResult = ActionResultHelper.IsObjectResult(context.HandlerMethod.MethodInfo.ReturnType, typeof(void))
-            };
-
-            if (unitOfWorkAttr?.IsDisabled == true)
-            {
-                await next();
-                return;
-            }
-
-            var options = CreateOptions(context, unitOfWorkAttr);
-
-            //Trying to begin a reserved UOW by AbpUnitOfWorkMiddleware
-            if (_unitOfWorkManager.TryBeginReserved(AbpUnitOfWorkMiddleware.UnitOfWorkReservationName, options))
-            {
-                var result = await next();
-                if (!Succeed(result))
-                {
-                    await RollbackAsync(context);
-                }
-
-                return;
-            }
-
-            //Begin a new, independent unit of work
-            using (var uow = _unitOfWorkManager.Begin(options))
-            {
-                var result = await next();
-                if (Succeed(result))
-                {
-                    await uow.CompleteAsync(context.HttpContext.RequestAborted);
-                }
-            }
+        if (unitOfWorkAttr?.IsDisabled == true)
+        {
+            await next();
+            return;
         }
 
-        private AbpUnitOfWorkOptions CreateOptions(PageHandlerExecutingContext context, UnitOfWorkAttribute unitOfWorkAttribute)
+        var options = CreateOptions(context, unitOfWorkAttr);
+
+        var unitOfWorkManager = context.GetRequiredService<IUnitOfWorkManager>();
+        var cancellationTokenProvider = context.GetRequiredService<ICancellationTokenProvider>();
+
+        //Trying to begin a reserved UOW by AbpUnitOfWorkMiddleware
+        if (unitOfWorkManager.TryBeginReserved(UnitOfWork.UnitOfWorkReservationName, options))
         {
-            var options = new AbpUnitOfWorkOptions();
-
-            unitOfWorkAttribute?.SetOptions(options);
-
-            if (unitOfWorkAttribute?.IsTransactional == null)
+            var result = await next();
+            if (Succeed(result))
             {
-                options.IsTransactional = _defaultOptions.CalculateIsTransactional(
-                    autoValue: !string.Equals(context.HttpContext.Request.Method, HttpMethod.Get.Method, StringComparison.OrdinalIgnoreCase)
-                );
+                await SaveChangesAsync(context, unitOfWorkManager, cancellationTokenProvider.Token);
+            }
+            else
+            {
+                await RollbackAsync(context, unitOfWorkManager, cancellationTokenProvider.Token);
             }
 
-            return options;
+            return;
         }
 
-        private async Task RollbackAsync(PageHandlerExecutingContext context)
+        using (var uow = unitOfWorkManager.Begin(options))
         {
-            var currentUow = _unitOfWorkManager.Current;
-            if (currentUow != null)
+            var result = await next();
+            if (Succeed(result))
             {
-                await currentUow.RollbackAsync(context.HttpContext.RequestAborted);
+                await uow.CompleteAsync(cancellationTokenProvider.Token);
+            }
+            else
+            {
+                await uow.RollbackAsync(cancellationTokenProvider.Token);
             }
         }
+    }
 
-        private static bool Succeed(PageHandlerExecutedContext result)
+    private AbpUnitOfWorkOptions CreateOptions(PageHandlerExecutingContext context, UnitOfWorkAttribute? unitOfWorkAttribute)
+    {
+        var options = new AbpUnitOfWorkOptions();
+
+        unitOfWorkAttribute?.SetOptions(options);
+
+        if (unitOfWorkAttribute?.IsTransactional == null)
         {
-            return result.Exception == null || result.ExceptionHandled;
+            var abpUnitOfWorkDefaultOptions = context.GetRequiredService<IOptions<AbpUnitOfWorkDefaultOptions>>().Value;
+            options.IsTransactional = abpUnitOfWorkDefaultOptions.CalculateIsTransactional(
+                autoValue: !(HttpMethodHelper.IsGet(context.HttpContext.Request.Method)
+                             || HttpMethodHelper.IsQuery(context.HttpContext.Request.Method))
+            );
         }
+
+        return options;
+    }
+
+    private async Task RollbackAsync(PageHandlerExecutingContext context, IUnitOfWorkManager unitOfWorkManager, CancellationToken cancellationToken)
+    {
+        var currentUow = unitOfWorkManager.Current;
+        if (currentUow != null)
+        {
+            await currentUow.RollbackAsync(cancellationToken);
+        }
+    }
+
+    private async Task SaveChangesAsync(PageHandlerExecutingContext context, IUnitOfWorkManager unitOfWorkManager, CancellationToken cancellationToken)
+    {
+        var currentUow = unitOfWorkManager.Current;
+        if (currentUow != null)
+        {
+            try
+            {
+                await currentUow.SaveChangesAsync(cancellationToken);
+            }
+            catch (Exception)
+            {
+                await currentUow.RollbackAsync(cancellationToken);
+                throw;
+            }
+        }
+    }
+
+    private static bool Succeed(PageHandlerExecutedContext result)
+    {
+        return result.Exception == null || result.ExceptionHandled;
     }
 }

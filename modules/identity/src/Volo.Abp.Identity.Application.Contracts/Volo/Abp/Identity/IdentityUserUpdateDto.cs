@@ -1,15 +1,15 @@
 using System.ComponentModel.DataAnnotations;
 using Volo.Abp.Auditing;
 using Volo.Abp.Domain.Entities;
+using Volo.Abp.Validation;
 
-namespace Volo.Abp.Identity
+namespace Volo.Abp.Identity;
+
+public class IdentityUserUpdateDto : IdentityUserCreateOrUpdateDtoBase, IHasConcurrencyStamp
 {
-    public class IdentityUserUpdateDto : IdentityUserCreateOrUpdateDtoBase, IHasConcurrencyStamp
-    {
-        [StringLength(IdentityUserConsts.MaxPasswordLength)]
-        [DisableAuditing]
-        public string Password { get; set; }
-        
-        public string ConcurrencyStamp { get; set; }
-    }
+    [DisableAuditing]
+    [DynamicStringLength(typeof(IdentityUserConsts), nameof(IdentityUserConsts.MaxPasswordLength))]
+    public string Password { get; set; }
+
+    public string ConcurrencyStamp { get; set; }
 }

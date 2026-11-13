@@ -1,72 +1,98 @@
-import { AuthService, SetRemember, ConfigState } from '@abp/ng.core';
-import { ToasterService } from '@abp/ng.theme.shared';
-import { Component, OnInit } from '@angular/core';
-import { FormBuilder, FormGroup, Validators } from '@angular/forms';
-import { Store } from '@ngxs/store';
-import { OAuthService } from 'angular-oauth2-oidc';
+import { Component, Injector, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import {
+  ReactiveFormsModule,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  Validators,
+} from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { throwError } from 'rxjs';
 import { catchError, finalize } from 'rxjs/operators';
-import snq from 'snq';
-import { eAccountComponents } from '../../enums/components';
+import {
+  AuthService,
+  AutofocusDirective,
+  ConfigStateService,
+  LocalizationPipe,
+  NgxValidateCoreModule,
+} from '@abp/ng.core';
+import { ButtonComponent, ToasterService } from '@abp/ng.theme.shared';
+import { eAccountComponents } from '../../enums';
+import { getRedirectUrl } from '../../utils';
 
-const { maxLength, minLength, required } = Validators;
+const { maxLength, required } = Validators;
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-login',
   templateUrl: './login.component.html',
+  imports: [
+    ReactiveFormsModule,
+    RouterLink,
+    LocalizationPipe,
+    ButtonComponent,
+    NgxValidateCoreModule,
+    AutofocusDirective,
+  ],
 })
 export class LoginComponent implements OnInit {
-  form: FormGroup;
+  protected injector = inject(Injector);
+  protected fb = inject(UntypedFormBuilder);
+  protected toasterService = inject(ToasterService);
+  protected authService = inject(AuthService);
+  protected configState = inject(ConfigStateService);
 
-  inProgress: boolean;
+  form!: UntypedFormGroup;
+
+  readonly inProgress = signal(false);
 
   isSelfRegistrationEnabled = true;
 
   authWrapperKey = eAccountComponents.AuthWrapper;
 
-  constructor(
-    private fb: FormBuilder,
-    private oauthService: OAuthService,
-    private store: Store,
-    private toasterService: ToasterService,
-    private authService: AuthService,
-  ) {}
-
   ngOnInit() {
+    this.init();
+    this.buildForm();
+  }
+
+  protected init() {
     this.isSelfRegistrationEnabled =
       (
-        (this.store.selectSnapshot(
-          ConfigState.getSetting('Abp.Account.IsSelfRegistrationEnabled'),
-        ) as string) || ''
+        (this.configState.getSetting('Abp.Account.IsSelfRegistrationEnabled') as string) || ''
       ).toLowerCase() !== 'false';
+  }
 
+  protected buildForm() {
     this.form = this.fb.group({
       username: ['', [required, maxLength(255)]],
       password: ['', [required, maxLength(128)]],
-      remember: [false],
+      rememberMe: [false],
     });
   }
 
   onSubmit() {
     if (this.form.invalid) return;
 
-    this.inProgress = true;
+    this.inProgress.set(true);
+
+    const { username, password, rememberMe } = this.form.value;
+
+    const redirectUrl = getRedirectUrl(this.injector);
+
     this.authService
-      .login(this.form.get('username').value, this.form.get('password').value)
+      .login({ username, password, rememberMe, redirectUrl })
       .pipe(
         catchError(err => {
           this.toasterService.error(
-            snq(() => err.error.error_description) ||
-              snq(() => err.error.error.message, 'AbpAccount::DefaultErrorMessage'),
-            'Error',
+            err.error?.error_description ||
+              err.error?.error.message ||
+              'AbpAccount::DefaultErrorMessage',
+            '',
             { life: 7000 },
           );
-          return throwError(err);
+          return throwError(() => err);
         }),
-        finalize(() => (this.inProgress = false)),
+        finalize(() => this.inProgress.set(false)),
       )
-      .subscribe(() => {
-        this.store.dispatch(new SetRemember(this.form.get('remember').value));
-      });
+      .subscribe();
   }
 }

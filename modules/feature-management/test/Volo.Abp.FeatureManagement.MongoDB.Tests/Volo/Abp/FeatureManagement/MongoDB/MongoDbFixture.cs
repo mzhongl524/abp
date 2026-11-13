@@ -1,16 +1,34 @@
 using System;
-using Mongo2Go;
+using MongoSandbox;
 
-namespace Volo.Abp.FeatureManagement.MongoDB
+namespace Volo.Abp.FeatureManagement.MongoDB;
+
+public class MongoDbFixture : IDisposable
 {
-    public class MongoDbFixture : IDisposable
-    {
-        private static readonly MongoDbRunner MongoDbRunner = MongoDbRunner.Start();
-        public static readonly string ConnectionString = MongoDbRunner.ConnectionString;
+    public readonly static IMongoRunner MongoDbRunner;
 
-        public void Dispose()
+    static MongoDbFixture()
+    {
+        MongoDbRunner = MongoRunner.Run(new MongoRunnerOptions
         {
-            MongoDbRunner?.Dispose();
-        }
+            UseSingleNodeReplicaSet = true
+        });
+    }
+
+    public static string GetRandomConnectionString()
+    {
+        return GetConnectionString("Db_" + Guid.NewGuid().ToString("N"));
+    }
+
+    public static string GetConnectionString(string databaseName)
+    {
+        var stringArray = MongoDbRunner.ConnectionString.Split('?');
+        var connectionString = stringArray[0].EnsureEndsWith('/') + databaseName + "/?" + stringArray[1];
+        return connectionString;
+    }
+
+    public void Dispose()
+    {
+        MongoDbRunner?.Dispose();
     }
 }

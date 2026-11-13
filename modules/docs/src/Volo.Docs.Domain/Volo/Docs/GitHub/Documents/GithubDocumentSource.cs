@@ -1,14 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Volo.Abp.Domain.Services;
 using Volo.Docs.Documents;
 using Volo.Docs.GitHub.Projects;
 using Volo.Docs.Projects;
 using Octokit;
 using Volo.Abp;
+using Volo.Abp.Data;
+using Volo.Docs.GitHub.Documents.Version;
 using Volo.Extensions;
 using Project = Volo.Docs.Projects.Project;
 
@@ -22,23 +26,28 @@ namespace Volo.Docs.GitHub.Documents
 
         private readonly IGithubRepositoryManager _githubRepositoryManager;
         private readonly IGithubPatchAnalyzer _githubPatchAnalyzer;
+        private readonly IDocumentRepository _documentRepository;
+        private readonly DocsGithubLanguageOptions _docsGithubLanguageOptions;
 
-        public GithubDocumentSource(IGithubRepositoryManager githubRepositoryManager, IGithubPatchAnalyzer githubPatchAnalyzer)
+        public GithubDocumentSource(
+            IGithubRepositoryManager githubRepositoryManager,
+            IGithubPatchAnalyzer githubPatchAnalyzer,
+            IDocumentRepository documentRepository,
+            IOptions<DocsGithubLanguageOptions> docsGithubLanguageOptions)
         {
             _githubRepositoryManager = githubRepositoryManager;
             _githubPatchAnalyzer = githubPatchAnalyzer;
+            _documentRepository = documentRepository;
+            _docsGithubLanguageOptions = docsGithubLanguageOptions.Value;
         }
 
         public virtual async Task<Document> GetDocumentAsync(Project project, string documentName, string languageCode, string version, DateTime? lastKnownSignificantUpdateTime = null)
         {
-            var token = project.GetGitHubAccessTokenOrNull();
             var rootUrl = project.GetGitHubUrl(version);
-            var userAgent = project.GetGithubUserAgentOrNull();
             var rawRootUrl = CalculateRawRootUrlWithLanguageCode(rootUrl, languageCode);
-            var rawDocumentUrl = rawRootUrl + documentName;
             var isNavigationDocument = documentName == project.NavigationDocumentName;
             var isParameterDocument = documentName == project.ParametersDocumentName;
-            var editLink = rootUrl.ReplaceFirst("/tree/", "/blob/") + languageCode + "/" + documentName;
+            var editLink = rootUrl.ReplaceFirst("/tree/", "/blob/").EnsureEndsWith('/') + languageCode + "/" + documentName;
             var localDirectory = "";
             var fileName = documentName;
 
@@ -48,12 +57,12 @@ namespace Volo.Docs.GitHub.Documents
                 fileName = documentName.Substring(documentName.LastIndexOf('/') + 1);
             }
 
-            var content = await DownloadWebContentAsStringAsync(rawDocumentUrl, token, userAgent);
+            var content = await DownloadWebContentAsStringAsync(project, documentName, languageCode, version);
             var commits = await GetGitHubCommitsOrNull(project, documentName, languageCode, version);
 
             var documentCreationTime = GetFirstCommitDate(commits);
             var lastUpdateTime = GetLastCommitDate(commits);
-            var lastSignificantUpdateTime = await GetLastKnownSignificantUpdateTime(project, documentName, languageCode, version, lastKnownSignificantUpdateTime, isNavigationDocument, isParameterDocument, commits, documentCreationTime);
+            var lastSignificantUpdateTime = await GetLastKnownSignificantUpdateTime(project, documentName, languageCode, version, lastKnownSignificantUpdateTime, isNavigationDocument, isParameterDocument, commits);
 
             var document = new Document
             (
@@ -81,9 +90,11 @@ namespace Volo.Docs.GitHub.Documents
             }
 
             var authors = GetAuthors(commits);
+
+            document.RemoveAllContributors();
             foreach (var author in authors)
             {
-                document.AddContributor(author.Login, author.HtmlUrl, author.AvatarUrl);
+                document.AddContributor(author.Login, author.HtmlUrl, author.AvatarUrl, author.CommitCount);
             }
 
             return document;
@@ -97,34 +108,55 @@ namespace Volo.Docs.GitHub.Documents
             DateTime? lastKnownSignificantUpdateTime,
             bool isNavigationDocument,
             bool isParameterDocument,
-            IReadOnlyList<GitHubCommit> commits,
-            DateTime documentCreationTime)
+            IReadOnlyList<GitHubCommit> commits)
         {
-            return !isNavigationDocument && !isParameterDocument && version == project.LatestVersionBranchName
-                ? await GetLastSignificantUpdateTime(
-                      commits,
-                      project,
-                      project.GetGitHubInnerUrl(languageCode, documentName),
-                      lastKnownSignificantUpdateTime,
-                      documentCreationTime
-                  ) ?? lastKnownSignificantUpdateTime
-                : null;
+            try
+            {
+                return !isNavigationDocument && !isParameterDocument && version == project.LatestVersionBranchName
+                    ? await GetLastSignificantUpdateTime(
+                        commits,
+                        project,
+                        project.GetGitHubInnerUrl(languageCode, documentName),
+                        lastKnownSignificantUpdateTime
+                    ) ?? lastKnownSignificantUpdateTime
+                    : null;
+            }
+            catch
+            {
+                Logger.LogWarning("Could not retrieved the last update time from Github.");
+                return null;
+            }
         }
 
-        private static List<Author> GetAuthors(IReadOnlyList<GitHubCommit> commits)
+        private static List<DocumentAuthor> GetAuthors(IReadOnlyList<GitHubCommit> commits)
         {
             if (commits == null || !commits.Any())
             {
-                return new List<Author>();
+                return new List<DocumentAuthor>();
             }
 
-            return commits
+            var authorsOrderedAndGrouped = commits
                 .Where(x => x.Author != null)
                 .Select(x => x.Author)
                 .GroupBy(x => x.Id)
-                .OrderByDescending(x => x.Count())
-                .Select(x => x.FirstOrDefault())
-                .ToList();
+                .OrderByDescending(x => x.Count());
+
+            var documentAuthors = new List<DocumentAuthor>();
+
+            foreach (var authorGroup in authorsOrderedAndGrouped)
+            {
+                var author =  authorGroup.FirstOrDefault();
+                var documentAuthor = new DocumentAuthor
+                {
+                    CommitCount = authorGroup.Count(),
+                    AvatarUrl = author.AvatarUrl,
+                    HtmlUrl = author.HtmlUrl,
+                    Login = author.Login
+                };
+                documentAuthors.Add(documentAuthor);
+            }
+
+            return documentAuthors;
         }
 
         private static DateTime GetLastCommitDate(IReadOnlyList<GitHubCommit> commits)
@@ -141,7 +173,7 @@ namespace Volo.Docs.GitHub.Documents
         {
             if (commits == null)
             {
-                return DateTime.MinValue;
+                return DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
             }
 
             var gitHubCommit = isFirstCommit ?
@@ -150,20 +182,20 @@ namespace Volo.Docs.GitHub.Documents
 
             if (gitHubCommit == null)
             {
-                return DateTime.MinValue;
+                return DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
             }
 
             if (gitHubCommit.Commit == null)
             {
-                return DateTime.MinValue;
+                return DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
             }
 
             if (gitHubCommit.Commit.Author == null)
             {
-                return DateTime.MinValue;
+                return DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
             }
 
-            return gitHubCommit.Commit.Author.Date.DateTime;
+            return gitHubCommit.Commit.Author.Date.UtcDateTime;
         }
 
         private async Task<IReadOnlyList<GitHubCommit>> GetGitHubCommitsOrNull(Project project, string documentName, string languageCode, string version)
@@ -172,14 +204,14 @@ namespace Volo.Docs.GitHub.Documents
             * Getting file commits usually throws "Resource temporarily unavailable" or "Network is unreachable"
             * This is a trival information and running this inside try-catch is safer.
             */
-            
+
             try
             {
                 return await GetFileCommitsAsync(project, version, project.GetGitHubInnerUrl(languageCode, documentName));
             }
             catch (Exception e)
             {
-                Logger.LogError(e.ToString());
+                Logger.LogWarning(e.ToString());
                 return null;
             }
         }
@@ -188,8 +220,7 @@ namespace Volo.Docs.GitHub.Documents
             IReadOnlyList<GitHubCommit> commits,
             Project project,
             string fileName,
-            DateTime? lastKnownSignificantUpdateTime,
-            DateTime documentCreationTime)
+            DateTime? lastKnownSignificantUpdateTime)
         {
             if (commits == null || !commits.Any())
             {
@@ -199,8 +230,8 @@ namespace Volo.Docs.GitHub.Documents
             var fileCommitsAfterCreation = commits.Take(commits.Count - 1);
 
             var commitsToEvaluate = (lastKnownSignificantUpdateTime != null
-                ? fileCommitsAfterCreation.Where(c => c.Commit.Author.Date.DateTime > lastKnownSignificantUpdateTime)
-                : fileCommitsAfterCreation).Where(c => c.Commit.Author.Date.DateTime > DateTime.Now.AddDays(-14));
+                ? fileCommitsAfterCreation.Where(c => c.Commit.Author.Date.UtcDateTime > lastKnownSignificantUpdateTime)
+                : fileCommitsAfterCreation).Where(c => c.Commit.Author.Date.UtcDateTime > DateTime.UtcNow.AddDays(-14));
 
             foreach (var gitHubCommit in commitsToEvaluate)
             {
@@ -212,7 +243,7 @@ namespace Volo.Docs.GitHub.Documents
 
                 if (_githubPatchAnalyzer.HasPatchSignificantChanges(fullCommit.Files.First(f => f.Filename == fileName).Patch))
                 {
-                    return gitHubCommit.Commit.Author.Date.DateTime;
+                    return gitHubCommit.Commit.Author.Date.UtcDateTime;
                 }
             }
 
@@ -221,15 +252,19 @@ namespace Volo.Docs.GitHub.Documents
 
         public async Task<List<VersionInfo>> GetVersionsAsync(Project project)
         {
+            var url = project.GetGitHubUrl();
+            var ownerName = GetOwnerNameFromUrl(url);
+            var repositoryName = GetRepositoryNameFromUrl(url);
+            var githubVersionProviderSource = GetGithubVersionProviderSource(project);
+
             List<VersionInfo> versions;
             try
             {
-                versions = (await GetReleasesAsync(project))
-                    .OrderByDescending(r => r.PublishedAt)
+                versions = (await _githubRepositoryManager.GetVersionsAsync(ownerName, repositoryName, project.GetGitHubAccessTokenOrNull(), githubVersionProviderSource))
                     .Select(r => new VersionInfo
                     {
-                        Name = r.TagName,
-                        DisplayName = r.TagName
+                        Name = r.Name,
+                        DisplayName = r.Name
                     }).ToList();
             }
             catch (Exception ex)
@@ -239,12 +274,43 @@ namespace Volo.Docs.GitHub.Documents
                 versions = new List<VersionInfo>();
             }
 
-            if (!versions.Any() && !string.IsNullOrEmpty(project.LatestVersionBranchName))
+            if (githubVersionProviderSource == GithubVersionProviderSource.Branches && project.ExtraProperties.ContainsKey("VersionBranchPrefix"))
             {
-                versions.Add(new VersionInfo { DisplayName = "1.0.0", Name = project.LatestVersionBranchName });
+                var prefix = project.GetProperty<string>("VersionBranchPrefix");
+
+                if (!string.IsNullOrEmpty(prefix))
+                {
+                    versions = versions.Where(v => v.Name.StartsWith(prefix)).ToList();
+                    foreach (var v in versions)
+                    {
+                        v.Name = v.Name.Substring(prefix.Length);
+                        v.DisplayName = v.DisplayName.Substring(prefix.Length);
+                    }
+                }
+
+                versions = SemanticVersionHelper.OrderByDescending(versions);
+            }
+
+            if(githubVersionProviderSource == GithubVersionProviderSource.Releases)
+            {
+                if (!versions.Any() && !string.IsNullOrEmpty(project.LatestVersionBranchName))
+                {
+                    versions.Add(new VersionInfo { DisplayName = "1.0.0", Name = project.LatestVersionBranchName });
+                }
+                else
+                {
+                    versions = SemanticVersionHelper.OrderByDescending(versions);
+                }
             }
 
             return versions;
+        }
+
+        private GithubVersionProviderSource GetGithubVersionProviderSource(Project project)
+        {
+            return project.HasProperty("GithubVersionProviderSource")
+                ? project.GetProperty<GithubVersionProviderSource>("GithubVersionProviderSource")
+                : GithubVersionProviderSource.Releases;
         }
 
         public async Task<DocumentResource> GetResource(Project project, string resourceName, string languageCode, string version)
@@ -264,25 +330,28 @@ namespace Volo.Docs.GitHub.Documents
             var token = project.GetGitHubAccessTokenOrNull();
             var rootUrl = project.GetGitHubUrl(version);
             var userAgent = project.GetGithubUserAgentOrNull();
-
             var url = CalculateRawRootUrl(rootUrl) + DocsDomainConsts.LanguageConfigFileName;
 
-            var configAsJson = await DownloadWebContentAsStringAsync(url, token, userAgent);
-
-            if (!JsonConvertExtensions.TryDeserializeObject<LanguageConfig>(configAsJson, out var languageConfig))
+            try
             {
-                throw new UserFriendlyException($"Cannot validate language config file '{DocsDomainConsts.LanguageConfigFileName}' for the project {project.Name} - v{version}.");
+                var configAsJson = await _githubRepositoryManager.GetFileRawStringContentAsync(url, token, userAgent);
+
+                if (!DocsJsonSerializerHelper.TryDeserialize<LanguageConfig>(configAsJson, out var languageConfig))
+                {
+                    throw new UserFriendlyException($"Cannot validate language config file '{DocsDomainConsts.LanguageConfigFileName}' for the project {project.Name} - v{version}.");
+                }
+
+                return languageConfig;
             }
+            catch
+            {
+                Logger.LogWarning("Could not retrieved language list from Github. Using the default language from DocsGithubLanguageOptions.");
 
-            return languageConfig;
-        }
-
-        private async Task<IReadOnlyList<Release>> GetReleasesAsync(Project project)
-        {
-            var url = project.GetGitHubUrl();
-            var ownerName = GetOwnerNameFromUrl(url);
-            var repositoryName = GetRepositoryNameFromUrl(url);
-            return await _githubRepositoryManager.GetReleasesAsync(ownerName, repositoryName, project.GetGitHubAccessTokenOrNull());
+                return new LanguageConfig
+                {
+                    Languages = new List<LanguageConfigElement> { _docsGithubLanguageOptions.DefaultLanguage }
+                };
+            }
         }
 
         private async Task<IReadOnlyList<GitHubCommit>> GetFileCommitsAsync(Project project, string version, string filename)
@@ -327,19 +396,26 @@ namespace Volo.Docs.GitHub.Documents
             }
         }
 
-        private async Task<string> DownloadWebContentAsStringAsync(string rawUrl, string token, string userAgent)
+        private async Task<string> DownloadWebContentAsStringAsync(Project project, string documentName, string languageCode, string version)
         {
+            var token = project.GetGitHubAccessTokenOrNull();
+            var rootUrl = project.GetGitHubUrl(version);
+            var userAgent = project.GetGithubUserAgentOrNull();
+            var rawRootUrl = CalculateRawRootUrlWithLanguageCode(rootUrl, languageCode);
+            var rawDocumentUrl = rawRootUrl + documentName;
+
             try
             {
-                Logger.LogInformation("Downloading content from Github (DownloadWebContentAsStringAsync): " + rawUrl);
+                Logger.LogInformation("Downloading content from Github (DownloadWebContentAsStringAsync): " +
+                                      rawDocumentUrl);
 
-                return await _githubRepositoryManager.GetFileRawStringContentAsync(rawUrl, token, userAgent);
+                return await _githubRepositoryManager.GetFileRawStringContentAsync(rawDocumentUrl, token, userAgent);
             }
             catch (Exception ex)
             {
                 //TODO: Only handle when document is really not available
-                Logger.LogWarning(ex.Message, ex);
-                throw new DocumentNotFoundException(rawUrl);
+                Logger.LogWarning($"{ex.Message}: {rawDocumentUrl}", ex);
+                throw new DocumentNotFoundException(rawDocumentUrl);
             }
         }
 

@@ -4,7 +4,9 @@
   <Import Project="..\..\..\common.props" />
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFrameworks>netstandard2.0;netstandard2.1;net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <WarningsAsErrors>Nullable</WarningsAsErrors>
     <AssemblyName>Volo.Abp.Ddd.Application</AssemblyName>
     <PackageId>Volo.Abp.Ddd.Application</PackageId>
     <AssetTargetFallback>$(AssetTargetFallback);portable-net45+win8+wp8+wpa81;</AssetTargetFallback>
@@ -19,6 +21,7 @@
     <ProjectReference Include="..\Volo.Abp.Ddd.Application.Contracts\Volo.Abp.Ddd.Application.Contracts.csproj" />
     <ProjectReference Include="..\Volo.Abp.Ddd.Domain\Volo.Abp.Ddd.Domain.csproj" />
     <ProjectReference Include="..\Volo.Abp.Features\Volo.Abp.Features.csproj" />
+    <ProjectReference Include="..\Volo.Abp.GlobalFeatures\Volo.Abp.GlobalFeatures.csproj" />
     <ProjectReference Include="..\Volo.Abp.Http.Abstractions\Volo.Abp.Http.Abstractions.csproj" />
     <ProjectReference Include="..\Volo.Abp.Localization\Volo.Abp.Localization.csproj" />
     <ProjectReference Include="..\Volo.Abp.ObjectMapping\Volo.Abp.ObjectMapping.csproj" />

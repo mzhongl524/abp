@@ -1,24 +1,21 @@
-import { Directive, ElementRef, EventEmitter, OnInit, Output, OnDestroy } from '@angular/core';
+import { Directive, ElementRef, OnInit, inject, output } from '@angular/core';
 import { fromEvent } from 'rxjs';
-import { takeUntilDestroy } from '../utils/rxjs-utils';
+import { SubscriptionService } from '../services/subscription.service';
 
 @Directive({
-  // tslint:disable-next-line: directive-selector
   selector: '[click.stop]',
+  providers: [SubscriptionService],
 })
-export class StopPropagationDirective implements OnInit, OnDestroy {
-  @Output('click.stop') readonly stopPropEvent = new EventEmitter<MouseEvent>();
+export class StopPropagationDirective implements OnInit {
+  private el = inject(ElementRef);
+  private subscription = inject(SubscriptionService);
 
-  constructor(private el: ElementRef) {}
+  readonly stopPropEvent = output<MouseEvent>({ alias: 'click.stop' });
 
   ngOnInit(): void {
-    fromEvent(this.el.nativeElement, 'click')
-      .pipe(takeUntilDestroy(this))
-      .subscribe((event: MouseEvent) => {
-        event.stopPropagation();
-        this.stopPropEvent.emit(event);
-      });
+    this.subscription.addOne(fromEvent<MouseEvent>(this.el.nativeElement, 'click'), event => {
+      event.stopPropagation();
+      this.stopPropEvent.emit(event);
+    });
   }
-
-  ngOnDestroy(): void {}
 }

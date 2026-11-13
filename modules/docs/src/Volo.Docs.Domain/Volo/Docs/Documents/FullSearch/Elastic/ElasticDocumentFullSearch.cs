@@ -1,10 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Elasticsearch.Net;
+using Elastic.Clients.Elasticsearch;
+using Elastic.Clients.Elasticsearch.Core.Search;
+using Elastic.Clients.Elasticsearch.IndexManagement;
+using Elastic.Clients.Elasticsearch.Mapping;
+using Elastic.Clients.Elasticsearch.QueryDsl;
+using Elastic.Transport.Products.Elasticsearch;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Nest;
 using Volo.Abp;
 using Volo.Abp.Domain.Services;
 
@@ -14,85 +20,105 @@ namespace Volo.Docs.Documents.FullSearch.Elastic
     {
         private readonly IElasticClientProvider _clientProvider;
         private readonly DocsElasticSearchOptions _options;
+        private readonly ILogger<ElasticDocumentFullSearch> _logger;
 
-        public ElasticDocumentFullSearch(IElasticClientProvider clientProvider, IOptions<DocsElasticSearchOptions> options)
+        public ElasticDocumentFullSearch(IElasticClientProvider clientProvider,
+            IOptions<DocsElasticSearchOptions> options,
+            ILogger<ElasticDocumentFullSearch> logger)
         {
             _clientProvider = clientProvider;
+            _logger = logger;
             _options = options.Value;
         }
 
-        public async Task CreateIndexIfNeededAsync(CancellationToken cancellationToken = default)
+        public virtual async Task CreateIndexIfNeededAsync(CancellationToken cancellationToken = default)
         {
             ValidateElasticSearchEnabled();
 
             var client = _clientProvider.GetClient();
 
-            var existsResponse = await client.Indices.ExistsAsync(_options.IndexName, ct: cancellationToken);
+            var existsResponse = await client.Indices.ExistsAsync(_options.IndexName, cancellationToken);
 
             HandleError(existsResponse);
 
             if (!existsResponse.Exists)
             {
-                HandleError(await client.Indices.CreateAsync(_options.IndexName, c => c
-                    .Map<EsDocument>(m =>
+                var properties = new Properties();
+                properties.Add<EsDocument>(d => d.Id, new KeywordProperty());
+                properties.Add<EsDocument>(d => d.ProjectId, new KeywordProperty());
+                properties.Add<EsDocument>(d => d.Name, new KeywordProperty());
+                properties.Add<EsDocument>(d => d.FileName, new KeywordProperty());
+                properties.Add<EsDocument>(d => d.Version, new KeywordProperty());
+                properties.Add<EsDocument>(d => d.LanguageCode, new KeywordProperty());
+                properties.Add<EsDocument>(d => d.Content, new TextProperty());
+
+                HandleError(await client.Indices.CreateAsync(new CreateIndexRequest(_options.IndexName)
+                {
+                    Mappings = new TypeMapping
                     {
-                        return m
-                            .Properties(p => p
-                                .Keyword(x => x.Name(d => d.Id))
-                                .Keyword(x => x.Name(d => d.ProjectId))
-                                .Keyword(x => x.Name(d => d.Name))
-                                .Keyword(x => x.Name(d => d.FileName))
-                                .Keyword(x => x.Name(d => d.Version))
-                                .Keyword(x => x.Name(d => d.LanguageCode))
-                                .Text(x => x.Name(d => d.Content)));
-                    }), cancellationToken));
+                        Properties = properties
+                    }
+                }, cancellationToken));
             }
         }
 
-        public async Task AddOrUpdateAsync(Document document, CancellationToken cancellationToken = default)
+        public virtual async Task AddOrUpdateAsync(Document document, CancellationToken cancellationToken = default)
         {
-            ValidateElasticSearchEnabled();
-
             var client = _clientProvider.GetClient();
-
-            var existsResponse = await client.DocumentExistsAsync(DocumentPath<EsDocument>.Id(document.Id),
-                x => x.Index(_options.IndexName), cancellationToken);
-
-            HandleError(existsResponse);
+            
+            // exist by name, project id, language code and version
+            HandleError(await client.DeleteByQueryAsync(new DeleteByQueryRequest(_options.IndexName)
+            {
+                Query = new BoolQuery
+                {
+                    Must = new Query[]
+                    {
+                        new TermQuery { Field = "projectId", Value = NormalizeField(document.ProjectId) },
+                        new TermQuery { Field = "languageCode", Value = NormalizeField(document.LanguageCode) },
+                        new TermQuery { Field = "version", Value = NormalizeField(document.Version) },
+                        new TermQuery { Field = "name", Value = document.Name }
+                    }
+                }
+            }, cancellationToken));
 
             var esDocument = new EsDocument
             {
-                Id = document.Id,
-                ProjectId = document.ProjectId,
+                Id = NormalizeField(document.Id),
+                ProjectId = NormalizeField(document.ProjectId),
                 Name = document.Name,
                 FileName = document.FileName,
                 Content = document.Content,
-                LanguageCode = document.LanguageCode,
-                Version = document.Version
+                LanguageCode = NormalizeField(document.LanguageCode),
+                Version = NormalizeField(document.Version)
             };
 
-            if (!existsResponse.Exists)
-            {
-                HandleError(await client.IndexAsync(esDocument,
-                    x => x.Id(document.Id).Index(_options.IndexName), cancellationToken));
-            }
-            else
-            {
-                HandleError(await client.UpdateAsync(DocumentPath<EsDocument>.Id(document.Id),
-                    x => x.Doc(esDocument).Index(_options.IndexName), cancellationToken));
-            }
-
+            HandleError(await client.IndexAsync(esDocument, _options.IndexName, esDocument.Id, cancellationToken));
         }
 
-        public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+        public virtual async Task AddOrUpdateManyAsync(IEnumerable<Document> documents, CancellationToken cancellationToken = default)
         {
-            ValidateElasticSearchEnabled();
+            var client = _clientProvider.GetClient();
 
-            HandleError(await _clientProvider.GetClient()
-                .DeleteAsync(DocumentPath<Document>.Id(id), x => x.Index(_options.IndexName), cancellationToken));
+            var esDocuments = documents.Select(x => new EsDocument {
+                Id = NormalizeField(x.Id),
+                ProjectId = NormalizeField(x.ProjectId),
+                Name = x.Name,
+                FileName = x.FileName,
+                Content = x.Content,
+                LanguageCode = NormalizeField(x.LanguageCode),
+                Version = NormalizeField(x.Version)
+            });
+
+            HandleError(await client.IndexManyAsync(esDocuments, _options.IndexName, cancellationToken));
         }
 
-        public async Task DeleteAllAsync(CancellationToken cancellationToken = default)
+        public virtual async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            HandleError(await _clientProvider.GetClient()
+                .DeleteAsync(_options.IndexName, NormalizeField(id), cancellationToken));
+        }
+
+        public virtual async Task DeleteAllAsync(CancellationToken cancellationToken = default)
         {
             ValidateElasticSearchEnabled();
 
@@ -105,7 +131,7 @@ namespace Volo.Docs.Documents.FullSearch.Elastic
                 .DeleteByQueryAsync(request, cancellationToken));
         }
 
-        public async Task DeleteAllByProjectIdAsync(Guid projectId, CancellationToken cancellationToken = default)
+        public virtual async Task DeleteAllByProjectIdAsync(Guid projectId, CancellationToken cancellationToken = default)
         {
             ValidateElasticSearchEnabled();
 
@@ -113,16 +139,16 @@ namespace Volo.Docs.Documents.FullSearch.Elastic
             {
                 Query = new BoolQuery
                 {
-                    Filter = new QueryContainer[]
+                    Filter = new Query[]
                     {
                         new BoolQuery
                         {
-                            Must = new QueryContainer[]
+                            Must = new Query[]
                             {
                                 new TermQuery
                                 {
                                     Field = "projectId",
-                                    Value = projectId
+                                    Value = NormalizeField(projectId)
                                 }
                             }
                         }
@@ -134,46 +160,63 @@ namespace Volo.Docs.Documents.FullSearch.Elastic
                 .DeleteByQueryAsync(request, cancellationToken));
         }
 
-        public async Task<List<EsDocument>> SearchAsync(string context, Guid projectId, string languageCode,
+        public virtual async Task<EsDocumentResult> SearchAsync(string context, Guid projectId, string languageCode,
             string version, int? skipCount = null, int? maxResultCount = null,
             CancellationToken cancellationToken = default)
         {
             ValidateElasticSearchEnabled();
+            
+            Query query;
+            // if context starts with " or ends with " then we search for exact match
+            if (context.StartsWith("\"") && context.EndsWith("\""))
+            {
+                context = context.Trim('"');
+                
+                query = new MatchPhraseQuery
+                {
+                    Field = "content",
+                    Query = context
+                };
+            }
+            else
+            {
+                query = new MatchQuery
+                {
+                    Field = "content",
+                    Query = context
+                };
+            }
 
-            var request = new SearchRequest
+            var request = new SearchRequest(_options.IndexName)
             {
                 Size = maxResultCount ?? 10,
                 From = skipCount ?? 0,
                 Query = new BoolQuery
                 {
-                    Must = new QueryContainer[]
+                    Must = new Query[]
                     {
-                        new MatchQuery
-                        {
-                            Field = "content",
-                            Query = context
-                        }
+                        query,
                     },
-                    Filter = new QueryContainer[]
+                    Filter = new Query[]
                     {
                         new BoolQuery
                         {
-                            Must = new QueryContainer[]
+                            Must = new Query[]
                             {
                                 new TermQuery
                                 {
                                     Field = "projectId",
-                                    Value = projectId
+                                    Value = NormalizeField(projectId)
                                 },
                                 new TermQuery
                                 {
                                     Field = "version",
-                                    Value = version
+                                    Value = NormalizeField(version)
                                 },
                                 new TermQuery
                                 {
                                     Field = "languageCode",
-                                    Value = languageCode
+                                    Value = NormalizeField(languageCode)
                                 }
                             }
                         }
@@ -183,7 +226,7 @@ namespace Volo.Docs.Documents.FullSearch.Elastic
                 {
                     PreTags = new[] { "<highlight>" },
                     PostTags = new[] { "</highlight>" },
-                    Fields = new Dictionary<Field, IHighlightField>
+                    Fields = new Dictionary<Field, HighlightField>
                     {
                         {
                             "content", new HighlightField()
@@ -200,31 +243,50 @@ namespace Volo.Docs.Documents.FullSearch.Elastic
             foreach (var hit in response.Hits)
             {
                 var doc = hit.Source;
-                if (hit.Highlight.ContainsKey("content"))
+                if(docs.Any(x => x.Id == doc.Id))
+                {
+                    continue;
+                }
+
+
+                if (hit.Highlight != null && hit.Highlight.TryGetValue("content", out var highlights))
                 {
                     doc.Highlight = new List<string>();
-                    doc.Highlight.AddRange(hit.Highlight["content"]);
+                    doc.Highlight.AddRange(highlights);
                 }
+
                 docs.Add(doc);
             }
 
-            return docs;
+            return new EsDocumentResult { EsDocuments = docs, TotalCount = response.Total };
         }
 
-        protected void HandleError(IElasticsearchResponse response)
+        protected virtual void HandleError(ElasticsearchResponse response)
         {
-            if (!response.ApiCall.Success)
+            if (!response.IsValidResponse)
             {
-                throw response.ApiCall.OriginalException;
+                response.TryGetOriginalException(out var exception);
+                _logger.LogError(exception,
+                    "An error occurred in the elastic search api call. {ElasticsearchServerError}", response.ElasticsearchServerError);
             }
         }
 
-        protected void ValidateElasticSearchEnabled()
+        public virtual void ValidateElasticSearchEnabled()
         {
             if (!_options.Enable)
             {
                 throw new BusinessException(DocsDomainErrorCodes.ElasticSearchNotEnabled);
             }
+        }
+
+        protected virtual string NormalizeField(Guid field)
+        {
+            return NormalizeField(field.ToString("N"));
+        }
+
+        protected virtual string NormalizeField(string field)
+        {
+            return field?.Replace("-", "").ToLower();
         }
     }
 }

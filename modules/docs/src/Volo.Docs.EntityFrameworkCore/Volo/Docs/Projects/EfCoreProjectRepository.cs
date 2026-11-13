@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Dynamic.Core;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Volo.Abp.Domain.Entities;
@@ -18,20 +19,36 @@ namespace Volo.Docs.Projects
         {
         }
 
-        public async Task<List<Project>> GetListAsync(string sorting, int maxResultCount, int skipCount)
+        public virtual async Task<List<Project>> GetListAsync(
+            string sorting,
+            int maxResultCount,
+            int skipCount, 
+            bool includeDetails = false,
+            CancellationToken cancellationToken = default)
         {
-            var projects = await DbSet.OrderBy(sorting ?? "Id desc")
+            var projects = await (await GetDbSetAsync()).IncludeDetails(includeDetails).OrderBy(sorting.IsNullOrEmpty() ? "Id desc" : sorting)
                 .PageBy(skipCount, maxResultCount)
-                .ToListAsync();
+                .ToListAsync(GetCancellationToken(cancellationToken));
 
             return projects;
         }
 
-        public async Task<Project> GetByShortNameAsync(string shortName)
+        public virtual async Task<List<ProjectWithoutDetails>> GetListWithoutDetailsAsync(CancellationToken cancellationToken = default)
+        {
+            return await (await GetDbSetAsync())
+                .Select(x=> new ProjectWithoutDetails() {
+                    Id = x.Id,
+                    Name = x.Name,
+                })
+                .OrderBy(x=>x.Name)
+                .ToListAsync(GetCancellationToken(cancellationToken));
+        }
+
+        public virtual async Task<Project> GetByShortNameAsync(string shortName, CancellationToken cancellationToken = default)
         {
             var normalizeShortName = NormalizeShortName(shortName);
-            
-            var project = await DbSet.FirstOrDefaultAsync(p => p.ShortName == normalizeShortName);
+
+            var project = await (await GetDbSetAsync()).FirstOrDefaultAsync(p => p.ShortName == normalizeShortName, GetCancellationToken(cancellationToken));
 
             if (project == null)
             {
@@ -41,16 +58,21 @@ namespace Volo.Docs.Projects
             return project;
         }
 
-        public async Task<bool> ShortNameExistsAsync(string shortName)
+        public virtual async Task<bool> ShortNameExistsAsync(string shortName, CancellationToken cancellationToken = default)
         {
             var normalizeShortName = NormalizeShortName(shortName);
-            
-            return await DbSet.AnyAsync(x => x.ShortName == normalizeShortName);
+
+            return await (await GetDbSetAsync()).AnyAsync(x => x.ShortName == normalizeShortName, GetCancellationToken(cancellationToken));
         }
-        
+
         private string NormalizeShortName(string shortName)
         {
             return shortName.ToLower();
+        }
+
+        public async override Task<IQueryable<Project>> WithDetailsAsync()
+        {
+            return (await GetQueryableAsync()).IncludeDetails();
         }
     }
 }

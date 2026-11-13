@@ -1,4 +1,4 @@
-import { createServiceFactory, SpectatorService } from '@ngneat/spectator/jest';
+import { createServiceFactory, SpectatorService } from '@ngneat/spectator/vitest';
 import { SortPipe } from '../pipes/sort.pipe';
 
 describe('SortPipe', () => {
@@ -17,13 +17,7 @@ describe('SortPipe', () => {
   });
 
   test('should sort object array in given order with given key', () => {
-    const array = [
-      { key: 5 },
-      { key: 'b' },
-      { key: 1 },
-      { key: 'a' },
-      { key: null },
-    ];
+    const array = [{ key: 5 }, { key: 'b' }, { key: 1 }, { key: 'a' }, { key: null }];
 
     expect(pipe.transform(array, 'asc', 'key')).toEqual([
       { key: 1 },

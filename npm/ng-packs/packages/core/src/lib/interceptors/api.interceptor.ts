@@ -1,41 +1,31 @@
-import { Injectable } from '@angular/core';
-import { HttpInterceptor, HttpHandler, HttpRequest } from '@angular/common/http';
-import { OAuthService } from 'angular-oauth2-oidc';
-import { Store } from '@ngxs/store';
-import { SessionState } from '../states';
-import { StartLoader, StopLoader } from '../actions/loader.actions';
+import {
+  HttpHandler,
+  HttpHeaders,
+  HttpInterceptor,
+  HttpRequest,
+  HttpEvent,
+} from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
 import { finalize } from 'rxjs/operators';
+import { Observable } from 'rxjs';
+import { HttpWaitService } from '../services';
 
-@Injectable()
-export class ApiInterceptor implements HttpInterceptor {
-  constructor(private oAuthService: OAuthService, private store: Store) {}
+@Injectable({
+  providedIn: 'root',
+})
+export class ApiInterceptor implements IApiInterceptor {
+  private httpWaitService = inject(HttpWaitService);
 
-  intercept(request: HttpRequest<any>, next: HttpHandler) {
-    this.store.dispatch(new StartLoader(request));
-
-    const headers = {} as any;
-
-    const token = this.oAuthService.getAccessToken();
-    if (!request.headers.has('Authorization') && token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const lang = this.store.selectSnapshot(SessionState.getLanguage);
-    if (!request.headers.has('Accept-Language') && lang) {
-      headers['Accept-Language'] = lang;
-    }
-
-    const tenant = this.store.selectSnapshot(SessionState.getTenant);
-    if (!request.headers.has('__tenant') && tenant) {
-      headers['__tenant'] = tenant.id;
-    }
-
-    return next
-      .handle(
-        request.clone({
-          setHeaders: headers,
-        }),
-      )
-      .pipe(finalize(() => this.store.dispatch(new StopLoader(request))));
+  getAdditionalHeaders(existingHeaders?: HttpHeaders) {
+    return existingHeaders || new HttpHeaders();
   }
+
+  intercept(request: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
+    this.httpWaitService.addRequest(request);
+    return next.handle(request).pipe(finalize(() => this.httpWaitService.deleteRequest(request)));
+  }
+}
+
+export interface IApiInterceptor extends HttpInterceptor {
+  getAdditionalHeaders(existingHeaders?: HttpHeaders): HttpHeaders;
 }

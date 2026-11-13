@@ -1,2 +1,2 @@
-export * from './permission-management.service';
-export * from './permission-management-state.service';
+export * from './extensions.service';
+export * from './resource-permission-state.service';

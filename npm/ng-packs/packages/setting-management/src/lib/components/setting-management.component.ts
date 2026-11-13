@@ -1,43 +1,47 @@
-import { ConfigState } from '@abp/ng.core';
-import { getSettingTabs, SettingTab } from '@abp/ng.theme.shared';
-import { Component, OnInit, TrackByFunction } from '@angular/core';
-import { Store } from '@ngxs/store';
-import { SetSelectedSettingTab } from '../actions/setting-management.actions';
-import { SettingManagementState } from '../states/setting-management.state';
+import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@angular/core';
+import { Tab as NgTab, TabContent, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
+import { NgComponentOutlet } from '@angular/common';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ABP, ForDirective, LocalizationPipe, PermissionDirective } from '@abp/ng.core';
+import { SettingTabsService } from '@abp/ng.setting-management/config';
+import { PageComponent } from '@abp/ng.components/page';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-setting-management',
   templateUrl: './setting-management.component.html',
+  imports: [
+    NgComponentOutlet,
+    PageComponent,
+    LocalizationPipe,
+    PermissionDirective,
+    ForDirective,
+    Tabs,
+    TabList,
+    NgTab,
+    TabPanel,
+    TabContent,
+  ],
+  styles: [
+    `
+      :host [ngTabPanel][inert] {
+        display: none;
+      }
+    `,
+  ],
 })
-export class SettingManagementComponent implements OnInit {
-  settings: SettingTab[] = [];
+export class SettingManagementComponent {
+  private settingTabsService = inject(SettingTabsService);
 
-  set selected(value: SettingTab) {
-    this.store.dispatch(new SetSelectedSettingTab(value));
-  }
-  get selected(): SettingTab {
-    const value = this.store.selectSnapshot(SettingManagementState.getSelectedTab);
+  readonly settings = toSignal(this.settingTabsService.visible$, { initialValue: [] });
+  readonly selected = signal<ABP.Tab | undefined>(undefined);
 
-    if ((!value || !value.component) && this.settings.length) {
-      return this.settings[0];
-    }
-
-    return value;
-  }
-
-  trackByFn: TrackByFunction<SettingTab> = (_, item) => item.name;
-
-  constructor(private store: Store) {}
-
-  ngOnInit() {
-    this.settings = getSettingTabs()
-      .filter(setting =>
-        this.store.selectSnapshot(ConfigState.getGrantedPolicy(setting.requiredPolicy)),
-      )
-      .sort((a, b) => a.order - b.order);
-
-    if (!this.selected && this.settings.length) {
-      this.selected = this.settings[0];
-    }
+  constructor() {
+    effect(() => {
+      const settings = this.settings();
+      if (!this.selected() && settings.length) {
+        this.selected.set(settings[0] as ABP.Tab);
+      }
+    });
   }
 }

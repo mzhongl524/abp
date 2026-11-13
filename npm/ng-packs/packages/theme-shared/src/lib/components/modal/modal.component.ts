@@ -1,192 +1,203 @@
-import { takeUntilDestroy } from '@abp/ng.core';
-import {
-  Component,
-  ContentChild,
-  ElementRef,
-  EventEmitter,
-  Input,
+import {Component,
+  DestroyRef,
   OnDestroy,
-  Output,
-  Renderer2,
+  OnInit,
   TemplateRef,
-  ViewChild,
-  ViewChildren,
-} from '@angular/core';
-import { fromEvent, Subject } from 'rxjs';
-import { debounceTime, distinctUntilChanged, filter, takeUntil } from 'rxjs/operators';
-import { fadeAnimation } from '../../animations/modal.animations';
-import { Confirmation } from '../../models/confirmation';
-import { ConfirmationService } from '../../services/confirmation.service';
-import { ModalService } from '../../services/modal.service';
+  contentChild,
+  effect,
+  inject,
+  input,
+  model,
+  output,
+  viewChild, ChangeDetectionStrategy,} from '@angular/core';
+import { DOCUMENT, NgTemplateOutlet } from '@angular/common';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { SubscriptionService, uuid } from '@abp/ng.core';
+import { NgbModal, NgbModalOptions, NgbModalRef } from '@ng-bootstrap/ng-bootstrap';
+import { fromEvent } from 'rxjs';
+import { debounceTime, filter } from 'rxjs/operators';
+import { Confirmation } from '../../models';
+import { ConfirmationService } from '../../services';
+import { SUPPRESS_UNSAVED_CHANGES_WARNING } from '../../tokens/suppress-unsaved-changes-warning.token';
 import { ButtonComponent } from '../button/button.component';
+import { DismissableModal, ModalDismissMode, ModalRefService } from './modal-ref.service';
 
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-modal',
   templateUrl: './modal.component.html',
-  animations: [fadeAnimation],
   styleUrls: ['./modal.component.scss'],
-  providers: [ModalService],
+  providers: [SubscriptionService],
+  imports: [NgTemplateOutlet],
 })
-export class ModalComponent implements OnDestroy {
-  @Input()
-  get visible(): boolean {
-    return this._visible;
-  }
-  set visible(value: boolean) {
-    if (typeof value !== 'boolean') return;
-    this.toggle$.next(value);
-  }
+export class ModalComponent implements OnInit, OnDestroy, DismissableModal {
+  protected readonly confirmationService = inject(ConfirmationService);
+  protected readonly modal = inject(NgbModal);
+  protected readonly modalRefService = inject(ModalRefService);
+  protected readonly suppressUnsavedChangesWarningToken = inject(SUPPRESS_UNSAVED_CHANGES_WARNING, {
+    optional: true,
+  });
+  protected readonly destroyRef = inject(DestroyRef);
+  private document = inject(DOCUMENT);
 
-  @Input()
-  get busy(): boolean {
-    return this._busy;
-  }
-  set busy(value: boolean) {
-    if (this.abpSubmit && this.abpSubmit instanceof ButtonComponent) {
-      this.abpSubmit.loading = value;
-    }
+  visible = model<boolean>(false);
 
-    this._busy = value;
-  }
+  busy = input(false);
 
-  @Input() centered = false;
+  options = input<NgbModalOptions>({ keyboard: true });
 
-  @Input() modalClass = '';
+  suppressUnsavedChangesWarning = input(this.suppressUnsavedChangesWarningToken);
 
-  @Input() size: ModalSize = 'lg';
+  modalContent = viewChild<TemplateRef<any>>('modalContent');
 
-  @ContentChild(ButtonComponent, { static: false, read: ButtonComponent })
-  abpSubmit: ButtonComponent;
+  abpHeader = contentChild<TemplateRef<any>>('abpHeader');
 
-  @ContentChild('abpHeader', { static: false }) abpHeader: TemplateRef<any>;
+  abpBody = contentChild<TemplateRef<any>>('abpBody');
 
-  @ContentChild('abpBody', { static: false }) abpBody: TemplateRef<any>;
+  abpFooter = contentChild<TemplateRef<any>>('abpFooter');
 
-  @ContentChild('abpFooter', { static: false }) abpFooter: TemplateRef<any>;
+  abpSubmit = contentChild(ButtonComponent, { read: ButtonComponent });
 
-  @ContentChild('abpClose', { static: false, read: ElementRef })
-  abpClose: ElementRef<any>;
+  readonly init = output();
 
-  @ViewChild('template', { static: false }) template: TemplateRef<any>;
+  readonly appear = output();
 
-  @ViewChild('abpModalContent', { static: false }) modalContent: ElementRef;
+  readonly disappear = output();
 
-  @ViewChildren('abp-button') abpButtons;
-
-  @Output() readonly visibleChange = new EventEmitter<boolean>();
-
-  @Output() readonly init = new EventEmitter<void>();
-
-  @Output() readonly appear = new EventEmitter();
-
-  @Output() readonly disappear = new EventEmitter();
-
-  _visible = false;
-
-  _busy = false;
-
-  isModalOpen = false;
+  modalRef!: NgbModalRef;
 
   isConfirmationOpen = false;
 
-  destroy$ = new Subject<void>();
+  modalIdentifier = `modal-${uuid()}`;
 
-  private toggle$ = new Subject<boolean>();
+  get modalWindowRef() {
+    return this.document.querySelector(`ngb-modal-window.${this.modalIdentifier}`);
+  }
 
   get isFormDirty(): boolean {
-    return Boolean(document.querySelector('.modal-dialog .ng-dirty'));
+    return Boolean(this.modalWindowRef?.querySelector('.ng-dirty'));
   }
 
-  constructor(
-    private renderer: Renderer2,
-    private confirmationService: ConfirmationService,
-    private modalService: ModalService,
-  ) {
-    this.initToggleStream();
+  constructor() {
+    effect(() => {
+      this.toggle(this.visible());
+    });
+
+    effect(() => {
+      const submit = this.abpSubmit();
+      if (!(submit instanceof ButtonComponent)) {
+        return;
+      }
+
+      submit.setLoading(this.visible() && this.busy());
+    });
   }
 
-  private initToggleStream() {
-    this.toggle$
-      .pipe(takeUntilDestroy(this), debounceTime(0), distinctUntilChanged())
-      .subscribe(value => this.toggle(value));
+  ngOnInit(): void {
+    this.modalRefService.register(this);
   }
 
-  private toggle(value: boolean) {
-    this.isModalOpen = value;
-    this._visible = value;
-    this.visibleChange.emit(value);
-
-    if (value) {
-      this.modalService.renderTemplate(this.template);
-      setTimeout(() => this.listen(), 0);
-      this.renderer.addClass(document.body, 'modal-open');
-      this.appear.emit();
-    } else {
-      this.modalService.clearModal();
-      this.renderer.removeClass(document.body, 'modal-open');
-      this.disappear.emit();
-      this.destroy$.next();
+  dismiss(mode: ModalDismissMode) {
+    switch (mode) {
+      case 'hard':
+        this.visible.set(false);
+        break;
+      case 'soft':
+        this.close();
+        break;
+      default:
+        break;
     }
   }
 
+  protected toggle(value: boolean) {
+    this.visible.set(value);
+
+    if (!value) {
+      if (this.modalRef) {
+        const ref = this.modalRef;
+        this.modalRef = undefined!;
+        ref.dismiss();
+      }
+
+      this.disappear.emit();
+      return;
+    }
+
+    if (this.modalWindowRef) {
+      return;
+    }
+
+    setTimeout(() => this.listen(), 0);
+    this.modalRef = this.modal.open(this.modalContent(), {
+      size: 'md',
+      centered: false,
+      keyboard: false,
+      scrollable: true,
+      beforeDismiss: () => {
+        if (!this.visible()) return true;
+
+        this.close();
+        return !this.visible();
+      },
+      ...this.options(),
+      windowClass: `${this.options().windowClass || ''} ${this.modalIdentifier}`,
+    });
+
+    this.modalRef.result.finally(() => {
+      this.modalRef = undefined!;
+    });
+
+    this.appear.emit();
+  }
+
   ngOnDestroy(): void {
-    this.destroy$.next();
+    this.modalRefService.unregister(this);
+    this.toggle(false);
   }
 
   close() {
-    if (this.busy) return;
+    if (this.busy()) return;
 
-    if (this.isFormDirty) {
+    if (this.isFormDirty && !this.suppressUnsavedChangesWarning()) {
       if (this.isConfirmationOpen) return;
 
       this.isConfirmationOpen = true;
       this.confirmationService
-        .warn(
-          'AbpAccount::AreYouSureYouWantToCancelEditingWarningMessage',
-          'AbpAccount::AreYouSure',
-        )
+        .warn('AbpUi::AreYouSureYouWantToCancelEditingWarningMessage', 'AbpUi::AreYouSure', {
+          dismissible: false,
+        })
         .subscribe((status: Confirmation.Status) => {
           this.isConfirmationOpen = false;
           if (status === Confirmation.Status.confirm) {
-            this.visible = false;
+            this.visible.set(false);
           }
         });
     } else {
-      this.visible = false;
+      this.visible.set(false);
     }
   }
 
   listen() {
-    fromEvent(document, 'keyup')
-      .pipe(
-        takeUntil(this.destroy$),
-        debounceTime(150),
-        filter((key: KeyboardEvent) => key && key.key === 'Escape'),
-      )
-      .subscribe(() => this.close());
-
-    fromEvent(window, 'beforeunload')
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(event => {
-        if (this.isFormDirty) {
-          event.returnValue = true;
-        } else {
-          event.returnValue = false;
-          delete event.returnValue;
-        }
-      });
-
-    setTimeout(() => {
-      if (!this.abpClose) return;
-      fromEvent(this.abpClose.nativeElement, 'click')
+    if (this.modalWindowRef) {
+      fromEvent<KeyboardEvent>(this.modalWindowRef, 'keyup')
         .pipe(
-          takeUntil(this.destroy$),
-          filter(() => !!this.modalContent),
+          takeUntilDestroyed(this.destroyRef),
+          debounceTime(150),
+          filter((key: KeyboardEvent) => key && key.key === 'Escape' && this.options().keyboard),
         )
         .subscribe(() => this.close());
-    }, 0);
+    }
+
+    fromEvent(window, 'beforeunload')
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(event => {
+        if (this.isFormDirty && !this.suppressUnsavedChangesWarning()) {
+          event.preventDefault();
+        }
+      });
 
     this.init.emit();
   }

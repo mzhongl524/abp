@@ -1,217 +1,380 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NuGet.Versioning;
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Volo.Abp.Cli.Args;
 using Volo.Abp.Cli.Commands;
-using Volo.Abp.Cli.NuGet;
+using Volo.Abp.Cli.Commands.Services;
+using Volo.Abp.Cli.Memory;
+using Volo.Abp.Cli.Version;
 using Volo.Abp.Cli.Utils;
 using Volo.Abp.DependencyInjection;
+using Volo.Abp.Internal.Telemetry;
+using Volo.Abp.Internal.Telemetry.Constants;
 
-namespace Volo.Abp.Cli
+namespace Volo.Abp.Cli;
+
+public class CliService : ITransientDependency
 {
-    public class CliService : ITransientDependency
+    private const string McpLogSource = nameof(CliService);
+    
+    private readonly MemoryService _memoryService;
+    private readonly ITelemetryService _telemetryService;
+    private readonly IMcpLogger _mcpLogger;
+    public ILogger<CliService> Logger { get; set; }
+    protected ICommandLineArgumentParser CommandLineArgumentParser { get; }
+    protected ICommandSelector CommandSelector { get; }
+    protected IServiceScopeFactory ServiceScopeFactory { get; }
+    protected PackageVersionCheckerService PackageVersionCheckerService { get; }
+    public ICmdHelper CmdHelper { get; }
+    protected CliVersionService CliVersionService { get; }
+
+    public CliService(
+        ICommandLineArgumentParser commandLineArgumentParser,
+        ICommandSelector commandSelector,
+        IServiceScopeFactory serviceScopeFactory,
+        PackageVersionCheckerService nugetService,
+        ICmdHelper cmdHelper,
+        MemoryService memoryService,
+        CliVersionService cliVersionService, 
+        ITelemetryService telemetryService,
+        IMcpLogger mcpLogger)
     {
-        public ILogger<CliService> Logger { get; set; }
-        protected ICommandLineArgumentParser CommandLineArgumentParser { get; }
-        protected ICommandSelector CommandSelector { get; }
-        protected IHybridServiceScopeFactory ServiceScopeFactory { get; }
-        protected NuGetService NuGetService { get; }
+        _memoryService = memoryService;
+        CommandLineArgumentParser = commandLineArgumentParser;
+        CommandSelector = commandSelector;
+        ServiceScopeFactory = serviceScopeFactory;
+        PackageVersionCheckerService = nugetService;
+        CmdHelper = cmdHelper;
+        CliVersionService = cliVersionService;
+        _telemetryService = telemetryService;
+        _mcpLogger = mcpLogger;
 
-        public CliService(
-            ICommandLineArgumentParser commandLineArgumentParser,
-            ICommandSelector commandSelector,
-            IHybridServiceScopeFactory serviceScopeFactory,
-            NuGetService nugetService)
+        Logger = NullLogger<CliService>.Instance;
+    }
+
+    public async Task RunAsync(string[] args)
+    {
+        var commandLineArgs = CommandLineArgumentParser.Parse(args);
+        var currentCliVersion = await CliVersionService.GetCurrentCliVersionAsync();
+        
+        var isMcpCommand = commandLineArgs.IsMcpCommand();
+        
+        // Don't print banner for MCP command to avoid corrupting stdout JSON-RPC stream
+        if (!isMcpCommand)
         {
-            CommandLineArgumentParser = commandLineArgumentParser;
-            CommandSelector = commandSelector;
-            ServiceScopeFactory = serviceScopeFactory;
-            NuGetService = nugetService;
-
-            Logger = NullLogger<CliService>.Instance;
+            Logger.LogInformation($"ABP CLI {currentCliVersion}");
         }
 
-        public async Task RunAsync(string[] args)
+#if !DEBUG
+        // Skip version check for MCP command to avoid corrupting stdout JSON-RPC stream
+        if (!isMcpCommand && !commandLineArgs.Options.ContainsKey("skip-cli-version-check"))
         {
-            Logger.LogInformation("ABP CLI (https://abp.io)");
+            await CheckCliVersionAsync(currentCliVersion);
+        }
+#endif
 
-            await CheckCliVersionAsync();
-
-            var commandLineArgs = CommandLineArgumentParser.Parse(args);
-            var commandType = CommandSelector.Select(commandLineArgs);
-
-            using (var scope = ServiceScopeFactory.CreateScope())
+        try
+        {
+            await using var _ = _telemetryService.TrackActivityAsync(ActivityNameConsts.AbpCliRun);
+            if (commandLineArgs.IsCommand("prompt"))
             {
-                var command = (IConsoleCommand)scope.ServiceProvider.GetRequiredService(commandType);
-
-                try
-                {
-                    await command.ExecuteAsync(commandLineArgs);
-                }
-                catch (CliUsageException usageException)
-                {
-                    Logger.LogWarning(usageException.Message);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogException(ex);
-                }
+                await RunPromptAsync();
+            }
+            else if (commandLineArgs.IsCommand("batch"))
+            {
+                await RunBatchAsync(commandLineArgs);
+            }
+            else
+            {
+                await RunInternalAsync(commandLineArgs);
             }
         }
+        catch (CliUsageException usageException)
+        {
+            // For MCP command, use IMcpLogger to avoid corrupting stdout JSON-RPC stream
+            if (commandLineArgs.IsMcpCommand())
+            {
+                _mcpLogger.Error(McpLogSource, usageException.Message);
+            }
+            else
+            {
+                Logger.LogWarning(usageException.Message);
+            }
+            Environment.ExitCode = 1;
+        }
+        catch (Exception ex)
+        {
+            await _telemetryService.AddErrorActivityAsync(ex.Message);
+            // For MCP command, use IMcpLogger to avoid corrupting stdout JSON-RPC stream
+            if (commandLineArgs.IsMcpCommand())
+            {
+                _mcpLogger.Error(McpLogSource, "Fatal error", ex);
+            }
+            else
+            {
+                Logger.LogException(ex);
+            }
+            throw;
+        }
+        finally
+        {
+            await _telemetryService.AddActivityAsync(ActivityNameConsts.AbpCliExit);
+        }
+    }
 
-        private async Task CheckCliVersionAsync()
+    private async Task RunPromptAsync()
+    {
+        string GetPromptInput()
+        {
+            Console.WriteLine("Enter the command to execute or `exit` to exit the prompt model");
+            Console.Write("> ");
+            return Console.ReadLine();
+        }
+
+        var promptInput = GetPromptInput();
+        do
+        {
+            try
+            {
+                var commandLineArgs = CommandLineArgumentParser.Parse(promptInput.Split(" ").Where(x => !x.IsNullOrWhiteSpace()).ToArray());
+
+                if (commandLineArgs.IsCommand("batch"))
+                {
+                    await RunBatchAsync(commandLineArgs);
+                }
+                else
+                {
+                    await RunInternalAsync(commandLineArgs);
+                }
+            }
+            catch (CliUsageException usageException)
+            {
+                Logger.LogWarning(usageException.Message);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogException(ex);
+            }
+
+            promptInput = GetPromptInput();
+
+        } while (promptInput?.ToLowerInvariant() != "exit");
+    }
+
+    private async Task RunBatchAsync(CommandLineArgs commandLineArgs)
+    {
+        var targetFile = commandLineArgs.Target;
+        if (targetFile.IsNullOrWhiteSpace())
+        {
+            throw new CliUsageException(
+                "Must provide a file name/path that contains a list of commands" +
+                Environment.NewLine + Environment.NewLine +
+                "Example: " +
+                "  abp batch commands.txt"
+                );
+        }
+
+        var filePath = Path.Combine(Directory.GetCurrentDirectory(), targetFile);
+        var fileLines = File.ReadAllLines(filePath);
+        foreach (var line in fileLines)
+        {
+            var lineText = line;
+            if (lineText.IsNullOrWhiteSpace() || lineText.StartsWith("#"))
+            {
+                continue;
+            }
+
+            if (lineText.Contains('#'))
+            {
+                lineText = lineText.Substring(0, lineText.IndexOf('#'));
+            }
+
+            var args = CommandLineArgumentParser.Parse(lineText);
+            await RunInternalAsync(args);
+        }
+    }
+
+    private async Task RunInternalAsync(CommandLineArgs commandLineArgs)
+    {
+        var commandType = CommandSelector.Select(commandLineArgs);
+
+        using (var scope = ServiceScopeFactory.CreateScope())
+        {
+            var command = (IConsoleCommand)scope.ServiceProvider.GetRequiredService(commandType);
+            await command.ExecuteAsync(commandLineArgs);
+        }
+    }
+
+    private async Task CheckCliVersionAsync(SemanticVersion currentCliVersion)
+    {
+        if (!await IsLatestVersionCheckExpiredAsync())
+        {
+            return;
+        }
+
+        try
         {
             var assembly = typeof(CliService).Assembly;
             var toolPath = GetToolPath(assembly);
-            var currentCliVersion = await GetCurrentCliVersion(assembly);
             var updateChannel = GetUpdateChannel(currentCliVersion);
 
-            Logger.LogInformation($"Version {currentCliVersion} ({updateChannel} channel)");
-
-            try
+            var latestVersionInfo = await GetLatestVersion(updateChannel);
+            if (ShouldLogNewVersionInfo(latestVersionInfo, currentCliVersion))
             {
-                var latestVersion = await GetLatestVersion(updateChannel);
-
-                if (latestVersion != null && latestVersion > currentCliVersion)
+                if(updateChannel == UpdateChannel.Prerelease && !latestVersionInfo.Version.IsPrerelease)
                 {
-                    LogNewVersionInfo(updateChannel, latestVersion, toolPath);
+                    latestVersionInfo = await PackageVersionCheckerService.GetLatestStableVersionFromGithubAsync();
+
+                    if(ShouldLogNewVersionInfo(latestVersionInfo, currentCliVersion))
+                    {
+                        LogNewVersionInfo(updateChannel, latestVersionInfo.Version, toolPath, latestVersionInfo.Message);
+                    }
+
+                    return;
+                }
+
+                LogNewVersionInfo(updateChannel, latestVersionInfo.Version, toolPath, latestVersionInfo.Message);
+            }
+        }
+        catch (Exception e)
+        {
+            Logger.LogWarning("Unable to retrieve the latest version: " + e.Message);
+        }
+    }
+
+    private bool ShouldLogNewVersionInfo(LatestVersionInfo latestVersionInfo, SemanticVersion currentCliVersion)
+    {
+        return latestVersionInfo != null && latestVersionInfo.Version > currentCliVersion;
+    }
+
+    private async Task<bool> IsLatestVersionCheckExpiredAsync()
+    {
+        try
+        {
+            var latestTimeAsString = await _memoryService.GetAsync(CliConsts.MemoryKeys.LatestCliVersionCheckDate);
+            if (DateTime.TryParse(latestTimeAsString,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var latestTimeParsed))
+            {
+                if (DateTime.Now.Subtract(latestTimeParsed).TotalDays < 1)
+                {
+                    return false;
                 }
             }
-            catch (Exception e)
-            {
-                Logger.LogWarning("Unable to retrieve the latest version");
-                Logger.LogWarning(e.Message);
-            }
-        }
 
-        private static string GetToolPath(Assembly assembly)
+            await _memoryService.SetAsync(CliConsts.MemoryKeys.LatestCliVersionCheckDate, DateTime.Now.ToString(CultureInfo.InvariantCulture));
+
+            return true;
+        }
+        catch (Exception)
         {
-            if (!assembly.Location.Contains(".store"))
-            {
-                return null;
-            }
-
-            return assembly.Location.Substring(0, assembly.Location.IndexOf(".store", StringComparison.Ordinal));
+            return true;
         }
+    }
 
-        private static async Task<SemanticVersion> GetCurrentCliVersion(Assembly assembly)
+    private string GetToolPath(Assembly assembly)
+    {
+        if (!assembly.Location.Contains(".store"))
         {
-            SemanticVersion currentCliVersion = default;
-
-            var consoleOutput = new StringReader(CmdHelper.RunCmdAndGetOutput($"dotnet tool list -g"));
-            string line;
-            while ((line = await consoleOutput.ReadLineAsync()) != null)
-            {
-                if (line.StartsWith("volo.abp.cli", StringComparison.InvariantCultureIgnoreCase))
-                {
-                    var version = line.Split(new char[0], StringSplitOptions.RemoveEmptyEntries)[1];
-
-                    SemanticVersion.TryParse(version, out currentCliVersion);
-
-                    break;
-                }
-            }
-
-
-            if (currentCliVersion == null)
-            {
-                // If not a tool executable, fallback to assembly version and treat as dev without updates
-                // Assembly revisions are not supported by SemVer scheme required for NuGet, trim to {major}.{minor}.{patch}
-                var assemblyVersion = string.Join(".", assembly.GetFileVersion().Split('.').Take(3));
-                return SemanticVersion.Parse(assemblyVersion + "-dev");
-            }
-
-            return currentCliVersion;
+            return null;
         }
 
-        private static UpdateChannel GetUpdateChannel(SemanticVersion currentCliVersion)
+        return assembly.Location.Substring(0, assembly.Location.IndexOf(".store", StringComparison.Ordinal));
+    }
+
+    private UpdateChannel GetUpdateChannel(SemanticVersion currentCliVersion)
+    {
+        if (!currentCliVersion.IsPrerelease)
         {
-            if (!currentCliVersion.IsPrerelease)
-            {
-                return UpdateChannel.Stable;
-            }
-
-            if (currentCliVersion.Release.Contains("preview"))
-            {
-                return UpdateChannel.Nightly;
-            }
-
-            if (currentCliVersion.Release.Contains("dev"))
-            {
-                return UpdateChannel.Development;
-            }
-
-            return UpdateChannel.Prerelease;
+            return UpdateChannel.Stable;
         }
 
-        private async Task<SemanticVersion> GetLatestVersion(UpdateChannel updateChannel)
+        if (currentCliVersion.Release.Contains("preview"))
         {
-            switch (updateChannel)
-            {
-                case UpdateChannel.Stable:
-                    return await NuGetService.GetLatestVersionOrNullAsync("Volo.Abp.Cli");
-
-                case UpdateChannel.Prerelease:
-                    return await NuGetService.GetLatestVersionOrNullAsync("Volo.Abp.Cli", includePreviews: true);
-
-                case UpdateChannel.Nightly:
-                    return await NuGetService.GetLatestVersionOrNullAsync("Volo.Abp.Cli", includeNightly: true);
-
-                default:
-                    return default;
-            }
+            return UpdateChannel.Nightly;
         }
 
-        private static bool IsGlobalTool(string toolPath)
+        if (currentCliVersion.Release.Contains("dev"))
         {
-            var globalPaths = new[] { @"%USERPROFILE%\.dotnet\tools\", "%HOME%/.dotnet/tools/", };
-            return globalPaths.Select(Environment.ExpandEnvironmentVariables).Contains(toolPath);
+            return UpdateChannel.Development;
         }
 
-        private void LogNewVersionInfo(UpdateChannel updateChannel, SemanticVersion latestVersion, string toolPath)
+        return UpdateChannel.Prerelease;
+    }
+
+    private async Task<LatestVersionInfo> GetLatestVersion(UpdateChannel updateChannel)
+    {
+        switch (updateChannel)
         {
-            var toolPathArg = IsGlobalTool(toolPath) ? "-g" : $"--tool-path {toolPath}";
+            case UpdateChannel.Stable:
+                return await PackageVersionCheckerService.GetLatestVersionOrNullAsync("Volo.Abp.Cli");
 
-            Logger.LogWarning($"ABP CLI has a newer {updateChannel.ToString().ToLowerInvariant()} version {latestVersion}, please update to get the latest features and fixes.");
-            Logger.LogWarning(string.Empty);
-            Logger.LogWarning("Update Command: ");
+            case UpdateChannel.Prerelease:
+                return await PackageVersionCheckerService.GetLatestVersionOrNullAsync("Volo.Abp.Cli", includeReleaseCandidates: true);
 
-            // Update command doesn't support prerelease versions https://github.com/dotnet/sdk/issues/2551 workaround is to uninstall & install
-            switch (updateChannel)
-            {
-                case UpdateChannel.Stable:
-                    Logger.LogWarning($"dotnet tool update {toolPathArg} Volo.Abp.Cli");
-                    break;
+            case UpdateChannel.Nightly:
+                return await PackageVersionCheckerService.GetLatestVersionOrNullAsync("Volo.Abp.Cli", includeNightly: true);
 
-                case UpdateChannel.Prerelease:
-                    Logger.LogWarning($"dotnet tool uninstall {toolPathArg} Volo.Abp.Cli");
-                    Logger.LogWarning($"dotnet tool install {toolPathArg} Volo.Abp.Cli --version {latestVersion}");
-                    break;
-
-                case UpdateChannel.Nightly:
-                case UpdateChannel.Development:
-                    Logger.LogWarning($"dotnet tool uninstall {toolPathArg} Volo.Abp.Cli");
-                    Logger.LogWarning($"dotnet tool install {toolPathArg} Volo.Abp.Cli --add-source https://www.myget.org/F/abp-nightly/api/v3/index.json --version {latestVersion}");
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(updateChannel), updateChannel, null);
-            }
-
-            Logger.LogWarning(string.Empty);
+            default:
+                return default;
         }
+    }
 
-        protected enum UpdateChannel
+    private bool IsGlobalTool(string toolPath)
+    {
+        var globalPaths = new[] { @"%USERPROFILE%\.dotnet\tools\", "%HOME%/.dotnet/tools/", };
+        return globalPaths.Select(Environment.ExpandEnvironmentVariables).Contains(toolPath);
+    }
+
+    private void LogNewVersionInfo(UpdateChannel updateChannel, SemanticVersion latestVersion, string toolPath, string message = null)
+    {
+        var toolPathArg = IsGlobalTool(toolPath) ? "-g" : $"--tool-path {toolPath}";
+
+        Logger.LogWarning($"A newer {updateChannel.ToString().ToLowerInvariant()} version of the ABP CLI is available: {latestVersion}.");
+
+        if (!string.IsNullOrWhiteSpace(message))
         {
-            Development,
-            Stable,
-            Prerelease,
-            Nightly
+            Logger.LogWarning(message);
         }
+
+        Logger.LogWarning(string.Empty);
+        Logger.LogWarning("Update Command: ");
+
+        // Update command doesn't support prerelease versions https://github.com/dotnet/sdk/issues/2551 workaround is to uninstall & install
+        switch (updateChannel)
+        {
+            case UpdateChannel.Stable:
+                Logger.LogWarning($"dotnet tool update {toolPathArg} Volo.Abp.Cli");
+                break;
+
+            case UpdateChannel.Prerelease:
+                Logger.LogWarning($"dotnet tool update {toolPathArg} Volo.Abp.Cli --version {latestVersion}");
+                break;
+
+            case UpdateChannel.Nightly:
+            case UpdateChannel.Development:
+                Logger.LogWarning($"dotnet tool uninstall {toolPathArg} Volo.Abp.Cli");
+                Logger.LogWarning($"dotnet tool install {toolPathArg} Volo.Abp.Cli --add-source https://www.myget.org/F/abp-nightly/api/v3/index.json --version {latestVersion}");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(updateChannel), updateChannel, null);
+        }
+
+        Logger.LogWarning(string.Empty);
+    }
+
+    protected enum UpdateChannel
+    {
+        Development,
+        Stable,
+        Prerelease,
+        Nightly
     }
 }

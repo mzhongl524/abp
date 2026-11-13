@@ -1,36 +1,62 @@
-import { CoreModule } from '@abp/ng.core';
-import { ThemeSharedModule } from '@abp/ng.theme.shared';
-import { NgModule, Provider } from '@angular/core';
-import { NgbDropdownModule } from '@ng-bootstrap/ng-bootstrap';
-import { NgxValidateCoreModule } from '@ngx-validate/core';
+import { LazyModuleFactory } from '@abp/ng.core';
+import { ModuleWithProviders, NgModule, NgModuleFactory } from '@angular/core';
+import { AccountConfigOptions } from './models/config-options';
+import { ACCOUNT_CONFIG_OPTIONS } from './tokens/config-options.token';
+import { accountConfigOptionsFactory } from './utils/factory-utils';
+import { AuthenticationFlowGuard } from './guards/authentication-flow.guard';
+import { RE_LOGIN_CONFIRMATION_TOKEN } from './tokens';
+
+import { ACCOUNT_EDIT_FORM_PROP_CONTRIBUTORS } from './tokens/extensions.token';
+import { AccountExtensionsGuard } from './guards/extensions.guard';
+import {
+  ForgotPasswordComponent,
+  LoginComponent,
+  ManageProfileComponent,
+  RegisterComponent,
+  ResetPasswordComponent,
+} from './components';
 import { AccountRoutingModule } from './account-routing.module';
-import { ChangePasswordComponent } from './components/change-password/change-password.component';
-import { LoginComponent } from './components/login/login.component';
-import { ManageProfileComponent } from './components/manage-profile/manage-profile.component';
-import { PersonalSettingsComponent } from './components/personal-settings/personal-settings.component';
-import { RegisterComponent } from './components/register/register.component';
-import { TenantBoxComponent } from './components/tenant-box/tenant-box.component';
-import { Options } from './models/options';
-import { ACCOUNT_OPTIONS, optionsFactory } from './tokens/options.token';
-import { AuthWrapperComponent } from './components/auth-wrapper/auth-wrapper.component';
 
 @NgModule({
-  declarations: [
-    AuthWrapperComponent,
+  declarations: [],
+  imports: [
     LoginComponent,
     RegisterComponent,
-    TenantBoxComponent,
-    ChangePasswordComponent,
+    ForgotPasswordComponent,
+    ResetPasswordComponent,
     ManageProfileComponent,
-    PersonalSettingsComponent,
-  ],
-  imports: [
-    CoreModule,
     AccountRoutingModule,
-    ThemeSharedModule,
-    NgbDropdownModule,
-    NgxValidateCoreModule,
   ],
   exports: [],
 })
-export class AccountModule {}
+export class AccountModule {
+  static forChild(options = {} as AccountConfigOptions): ModuleWithProviders<AccountModule> {
+    return {
+      ngModule: AccountModule,
+      providers: [
+        AuthenticationFlowGuard,
+        { provide: ACCOUNT_CONFIG_OPTIONS, useValue: options },
+        {
+          provide: 'ACCOUNT_OPTIONS',
+          useFactory: accountConfigOptionsFactory,
+          deps: [ACCOUNT_CONFIG_OPTIONS],
+        },
+        {
+          provide: RE_LOGIN_CONFIRMATION_TOKEN,
+          useValue: options.isPersonalSettingsChangedConfirmationActive ?? true,
+        },
+        {
+          provide: ACCOUNT_EDIT_FORM_PROP_CONTRIBUTORS,
+          useValue: options.editFormPropContributors,
+        },
+        AccountExtensionsGuard,
+      ],
+    };
+  }
+  /**
+   * @deprecated `AccountModule.forLazy()` is deprecated. You can use `createRoutes` **function** instead.
+   */
+  static forLazy(options = {} as AccountConfigOptions): NgModuleFactory<AccountModule> {
+    return new LazyModuleFactory(AccountModule.forChild(options));
+  }
+}

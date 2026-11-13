@@ -1,92 +1,86 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
-namespace Volo.Abp.AspNetCore.Mvc.Authentication
+namespace Volo.Abp.AspNetCore.Mvc.Authentication;
+
+public abstract class ChallengeAccountController : AbpController
 {
-    public abstract class ChallengeAccountController : AbpController
+    protected string[] ChallengeAuthenticationSchemas { get; }
+    protected string AuthenticationType { get; }
+    protected string[] ForbidSchemes { get; }
+
+    protected ChallengeAccountController(string[]? challengeAuthenticationSchemas = null)
     {
-        protected string[] ChallengeAuthenticationSchemas { get; }
-        protected string AuthenticationType { get; }
+        ChallengeAuthenticationSchemas = challengeAuthenticationSchemas ?? new[] { "oidc" };
+        AuthenticationType = "Identity.Application";
+        ForbidSchemes = Array.Empty<string>();
+    }
 
-        protected ChallengeAccountController(string[] challengeAuthenticationSchemas = null)
+    [HttpGet]
+    public virtual async Task<ActionResult> LoginAsync(string returnUrl = "", string returnUrlHash = "")
+    {
+        if (CurrentUser.IsAuthenticated)
         {
-            ChallengeAuthenticationSchemas = challengeAuthenticationSchemas ?? new[] { "oidc" };
-            AuthenticationType = "Identity.Application";
+            return await RedirectSafelyAsync(returnUrl, returnUrlHash);
         }
 
-        [HttpGet]
-        public ActionResult Login(string returnUrl = "", string returnUrlHash = "")
+        return Challenge(new AuthenticationProperties { RedirectUri = await GetRedirectUrlAsync(returnUrl, returnUrlHash) }, ChallengeAuthenticationSchemas);
+    }
+
+    [HttpGet]
+    public virtual async Task<ActionResult> LogoutAsync(string returnUrl = "", string returnUrlHash = "")
+    {
+        await HttpContext.SignOutAsync();
+
+        if (HttpContext.User.Identity?.AuthenticationType == AuthenticationType)
         {
-            if (CurrentUser.IsAuthenticated)
+            return await RedirectSafelyAsync(returnUrl, returnUrlHash);
+        }
+
+        return SignOut(new AuthenticationProperties { RedirectUri = await GetRedirectUrlAsync(returnUrl, returnUrlHash) }, ChallengeAuthenticationSchemas);
+    }
+
+    [HttpGet]
+    public virtual async Task<IActionResult> FrontChannelLogoutAsync(string sid)
+    {
+        if (User.Identity != null && User.Identity.IsAuthenticated)
+        {
+            var currentSid = User.FindFirst("sid")?.Value ?? string.Empty;
+            if (string.Equals(currentSid, sid, StringComparison.Ordinal))
             {
-                return RedirectSafely(returnUrl, returnUrlHash);
+                await LogoutAsync();
             }
-            else
+        }
+
+        return NoContent();
+    }
+
+    [HttpGet]
+    public virtual Task<IActionResult> AccessDeniedAsync()
+    {
+        return Task.FromResult<IActionResult>(Challenge(
+            new AuthenticationProperties
             {
-                return Challenge(
-                    new AuthenticationProperties
-                    {
-                        Parameters =
-                        {
-                            {"returnUrl", returnUrl},
-                            {"returnUrlHash", returnUrlHash}
-                        }
-                    },
-                    ChallengeAuthenticationSchemas
-                );
-            }
-        }
+                RedirectUri = "/"
+            },
+            (ForbidSchemes.IsNullOrEmpty()
+                ? new[]
+                {
+                    HttpContext.RequestServices.GetRequiredService<IOptions<AuthenticationOptions>>().Value.DefaultForbidScheme
+                }
+                : ForbidSchemes)!
+        ));
+    }
 
-        [HttpGet]
-        public async Task<ActionResult> Logout(string returnUrl = "", string returnUrlHash = "")
-        {
-            await HttpContext.SignOutAsync();
-
-            if (HttpContext.User.Identity.AuthenticationType == AuthenticationType)
-            {
-                return RedirectSafely(returnUrl, returnUrlHash);
-            }
-
-            return new SignOutResult(ChallengeAuthenticationSchemas);
-        }
-
-        protected RedirectResult RedirectSafely(string returnUrl, string returnUrlHash = null)
-        {
-            return Redirect(GetRedirectUrl(returnUrl, returnUrlHash));
-        }
-
-        private string GetRedirectUrl(string returnUrl, string returnUrlHash = null)
-        {
-            returnUrl = NormalizeReturnUrl(returnUrl);
-
-            if (!returnUrlHash.IsNullOrWhiteSpace())
-            {
-                returnUrl = returnUrl + returnUrlHash;
-            }
-
-            return returnUrl;
-        }
-
-        private string NormalizeReturnUrl(string returnUrl)
-        {
-            if (returnUrl.IsNullOrEmpty())
-            {
-                return GetAppHomeUrl();
-            }
-
-            if (Url.IsLocalUrl(returnUrl))
-            {
-                return returnUrl;
-            }
-
-            return GetAppHomeUrl();
-        }
-
-        protected virtual string GetAppHomeUrl()
-        {
-            return "/";
-        }
+    [HttpGet]
+    public virtual async Task<ActionResult> ChallengeAsync(string returnUrl = "", string returnUrlHash = "")
+    {
+        await HttpContext.SignOutAsync();
+        return Challenge(new AuthenticationProperties { RedirectUri = await GetRedirectUrlAsync(returnUrl, returnUrlHash) }, ChallengeAuthenticationSchemas);
     }
 }

@@ -1,23 +1,26 @@
+import { NgModule } from '@angular/core';
+import { RouterModule, Routes } from '@angular/router';
+
 import {
-  AuthGuard,
-  DynamicLayoutComponent,
-  PermissionGuard,
-  CoreModule,
-  ReplaceableRouteContainerComponent,
+  authGuard,
+  permissionGuard,
   ReplaceableComponents,
+  ReplaceableRouteContainerComponent,
+  RouterOutletComponent,
 } from '@abp/ng.core';
-import { NgModule, Type } from '@angular/core';
-import { RouterModule, Routes, Router, ActivatedRoute } from '@angular/router';
+
 import { RolesComponent } from './components/roles/roles.component';
 import { UsersComponent } from './components/users/users.component';
 import { eIdentityComponents } from './enums/components';
+import { identityExtensionsResolver } from './resolvers';
 
 const routes: Routes = [
   { path: '', redirectTo: 'roles', pathMatch: 'full' },
   {
     path: '',
-    component: DynamicLayoutComponent,
-    canActivate: [AuthGuard, PermissionGuard],
+    component: RouterOutletComponent,
+    canActivate: [authGuard, permissionGuard],
+    resolve: [identityExtensionsResolver],
     children: [
       {
         path: 'roles',
@@ -29,6 +32,7 @@ const routes: Routes = [
             defaultComponent: RolesComponent,
           } as ReplaceableComponents.RouteData<RolesComponent>,
         },
+        title: 'AbpIdentity::Roles',
       },
       {
         path: 'users',
@@ -40,13 +44,14 @@ const routes: Routes = [
             defaultComponent: UsersComponent,
           } as ReplaceableComponents.RouteData<UsersComponent>,
         },
+        title: 'AbpIdentity::Users',
       },
     ],
   },
 ];
 
 @NgModule({
-  imports: [RouterModule.forChild(routes), CoreModule],
+  imports: [RouterModule.forChild(routes)],
   exports: [RouterModule],
 })
 export class IdentityRoutingModule {}

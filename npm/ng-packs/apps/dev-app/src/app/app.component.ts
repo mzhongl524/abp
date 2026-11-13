@@ -1,25 +1,14 @@
-import { LazyLoadService, LOADING_STRATEGY } from '@abp/ng.core';
-import { Component, OnInit } from '@angular/core';
-import { forkJoin } from 'rxjs';
+import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { LoaderBarComponent } from '@abp/ng.theme.shared';
+import { DynamicLayoutComponent } from '@abp/ng.core';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'app-root',
   template: `
-    <abp-loader-bar></abp-loader-bar>
-    <router-outlet></router-outlet>
+    <abp-loader-bar />
+    <abp-dynamic-layout />
   `,
+  imports: [LoaderBarComponent, DynamicLayoutComponent],
 })
-export class AppComponent implements OnInit {
-  constructor(private lazyLoadService: LazyLoadService) {}
-
-  ngOnInit() {
-    forkJoin(
-      this.lazyLoadService.load(
-        LOADING_STRATEGY.PrependAnonymousStyleToHead('fontawesome-v4-shims.min.css'),
-      ),
-      this.lazyLoadService.load(
-        LOADING_STRATEGY.PrependAnonymousStyleToHead('fontawesome-all.min.css'),
-      ),
-    ).subscribe();
-  }
-}
+export class AppComponent {}

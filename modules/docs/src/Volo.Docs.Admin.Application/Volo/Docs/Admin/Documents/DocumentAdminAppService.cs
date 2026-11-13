@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
-using Newtonsoft.Json;
+using Microsoft.Extensions.Logging;
 using Volo.Abp;
+using Volo.Abp.Application.Dtos;
 using Volo.Abp.Application.Services;
 using Volo.Abp.Caching;
+using Volo.Docs.Admin.Projects;
 using Volo.Docs.Caching;
 using Volo.Docs.Documents;
 using Volo.Docs.Documents.FullSearch.Elastic;
@@ -25,13 +27,15 @@ namespace Volo.Docs.Admin.Documents
         private readonly IDistributedCache<DocumentUpdateInfo> _documentUpdateCache;
         private readonly IDistributedCache<List<VersionInfo>> _versionCache;
         private readonly IDistributedCache<LanguageConfig> _languageCache;
+        private readonly IDocumentFullSearch _elasticSearchService;
 
         public DocumentAdminAppService(IProjectRepository projectRepository,
             IDocumentRepository documentRepository,
             IDocumentSourceFactory documentStoreFactory,
             IDistributedCache<DocumentUpdateInfo> documentUpdateCache,
             IDistributedCache<List<VersionInfo>> versionCache,
-            IDistributedCache<LanguageConfig> languageCache)
+            IDistributedCache<LanguageConfig> languageCache,
+            IDocumentFullSearch elasticSearchService)
         {
             _projectRepository = projectRepository;
             _documentRepository = documentRepository;
@@ -39,11 +43,13 @@ namespace Volo.Docs.Admin.Documents
             _documentUpdateCache = documentUpdateCache;
             _versionCache = versionCache;
             _languageCache = languageCache;
+            _elasticSearchService = elasticSearchService;
 
             LocalizationResource = typeof(DocsResource);
+            ObjectMapperContext = typeof(DocsAdminApplicationModule);
         }
 
-        public async Task ClearCacheAsync(ClearCacheInput input)
+        public virtual async Task ClearCacheAsync(ClearCacheInput input)
         {
             var project = await _projectRepository.GetAsync(input.ProjectId);
 
@@ -53,19 +59,23 @@ namespace Volo.Docs.Admin.Documents
             var versionCacheKey = CacheKeyGenerator.GenerateProjectVersionsCacheKey(project);
             await _versionCache.RemoveAsync(versionCacheKey, true);
 
-            var documents = await _documentRepository.GetListByProjectId(project.Id);
+            var documents = await _documentRepository.GetListWithoutDetailsByProjectId(project.Id);
+            
+            var documentUpdateInfoCacheKeys = documents.Select(document =>
+                CacheKeyGenerator.GenerateDocumentUpdateInfoCacheKey(
+                    project: project,
+                    documentName: document.Name,
+                    languageCode: document.LanguageCode,
+                    version: document.Version
+                )
+            );
+            
+            await _documentUpdateCache.RemoveManyAsync(documentUpdateInfoCacheKeys);
 
-            foreach (var document in documents)
-            {
-                var documentUpdateInfoCacheKey = CacheKeyGenerator.GenerateDocumentUpdateInfoCacheKey(project, document.Name, document.LanguageCode, document.LanguageCode);
-                await _documentUpdateCache.RemoveAsync(documentUpdateInfoCacheKey);
-
-                document.LastCachedTime = DateTime.MinValue;
-                await _documentRepository.UpdateAsync(document);
-            }
+            await _documentRepository.UpdateProjectLastCachedTimeAsync(project.Id, DateTime.MinValue);
         }
 
-        public async Task PullAllAsync(PullAllDocumentInput input)
+        public virtual async Task PullAllAsync(PullAllDocumentInput input)
         {
             var project = await _projectRepository.GetAsync(input.ProjectId);
 
@@ -76,7 +86,7 @@ namespace Volo.Docs.Admin.Documents
                 input.Version
             );
 
-            if (!JsonConvertExtensions.TryDeserializeObject<NavigationNode>(navigationDocument.Content, out var navigation))
+            if (!DocsJsonSerializerHelper.TryDeserialize<NavigationNode>(navigationDocument.Content, out var navigation))
             {
                 throw new UserFriendlyException($"Cannot validate navigation file '{project.NavigationDocumentName}' for the project {project.Name}.");
             }
@@ -90,9 +100,22 @@ namespace Volo.Docs.Admin.Documents
             var documents = new List<Document>();
             foreach (var leaf in leafs)
             {
-                var sourceDocument =
-                    await source.GetDocumentAsync(project, leaf.Path, input.LanguageCode, input.Version);
-                documents.Add(sourceDocument);
+                if (leaf.Path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    leaf.Path.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                    (leaf.Path.StartsWith("{{") && leaf.Path.EndsWith("}}")))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var sourceDocument = await source.GetDocumentAsync(project, leaf.Path, input.LanguageCode, input.Version);
+                    documents.Add(sourceDocument);
+                }
+                catch (Exception e)
+                {
+                    Logger.LogException(e);
+                }
             }
 
             foreach (var document in documents)
@@ -106,7 +129,7 @@ namespace Volo.Docs.Admin.Documents
             }
         }
 
-        public async Task PullAsync(PullDocumentInput input)
+        public virtual async Task PullAsync(PullDocumentInput input)
         {
             var project = await _projectRepository.GetAsync(input.ProjectId);
 
@@ -118,6 +141,93 @@ namespace Volo.Docs.Admin.Documents
             await _documentRepository.InsertAsync(sourceDocument, true);
             await UpdateDocumentUpdateInfoCache(sourceDocument);
         }
+
+        public virtual async Task<PagedResultDto<DocumentDto>> GetAllAsync(GetAllInput input)
+        {
+            var totalCount = await _documentRepository.GetAllCountAsync(
+                projectId: input.ProjectId,
+                name: input.Name,
+                version: input.Version,
+                languageCode: input.LanguageCode,
+                fileName: input.FileName,
+                format: input.Format,
+                creationTimeMin: input.CreationTimeMin,
+                creationTimeMax: input.CreationTimeMax,
+                lastUpdatedTimeMin: input.LastUpdatedTimeMin,
+                lastUpdatedTimeMax: input.LastUpdatedTimeMax,
+                lastSignificantUpdateTimeMin: input.LastSignificantUpdateTimeMin,
+                lastSignificantUpdateTimeMax: input.LastSignificantUpdateTimeMax,
+                lastCachedTimeMin: input.LastCachedTimeMin,
+                lastCachedTimeMax: input.LastCachedTimeMax,
+                sorting: input.Sorting,
+                maxResultCount: input.MaxResultCount,
+                skipCount: input.SkipCount
+            );
+
+            var docs = await _documentRepository.GetAllAsync(
+                projectId: input.ProjectId,
+                name: input.Name,
+                version: input.Version,
+                languageCode: input.LanguageCode,
+                fileName: input.FileName,
+                format: input.Format,
+                creationTimeMin: input.CreationTimeMin,
+                creationTimeMax: input.CreationTimeMax,
+                lastUpdatedTimeMin: input.LastUpdatedTimeMin,
+                lastUpdatedTimeMax: input.LastUpdatedTimeMax,
+                lastSignificantUpdateTimeMin: input.LastSignificantUpdateTimeMin,
+                lastSignificantUpdateTimeMax: input.LastSignificantUpdateTimeMax,
+                lastCachedTimeMin: input.LastCachedTimeMin,
+                lastCachedTimeMax: input.LastCachedTimeMax,
+                sorting: input.Sorting,
+                maxResultCount: input.MaxResultCount,
+                skipCount: input.SkipCount
+            );
+
+            return new PagedResultDto<DocumentDto>
+            {
+                TotalCount = totalCount,
+                Items = ObjectMapper.Map<List<DocumentWithoutContent>, List<DocumentDto>>(docs)
+            };
+        }
+
+        public virtual async Task RemoveFromCacheAsync(Guid documentId)
+        {
+            var document = await _documentRepository.GetAsync(documentId);
+            var project = await _projectRepository.GetAsync(document.ProjectId);
+
+            var documentUpdateInfoCacheKey = CacheKeyGenerator.GenerateDocumentUpdateInfoCacheKey(
+                project: project,
+                documentName: document.Name,
+                languageCode: document.LanguageCode,
+                version: document.Version
+            );
+
+            await _documentUpdateCache.RemoveAsync(documentUpdateInfoCacheKey);
+            await _documentRepository.DeleteAsync(document);
+        }
+
+        public virtual async Task ReindexAsync(Guid documentId)
+        {
+            _elasticSearchService.ValidateElasticSearchEnabled();
+
+            await _elasticSearchService.DeleteAsync(documentId);
+            var document = await _documentRepository.GetAsync(documentId);
+            await _elasticSearchService.AddOrUpdateAsync(document);
+        }
+
+        public virtual async Task<List<DocumentInfoDto>> GetFilterItemsAsync()
+        {
+            var documents = await _documentRepository.GetUniqueListDocumentInfoAsync();
+            return ObjectMapper.Map<List<DocumentInfo>, List<DocumentInfoDto>>(documents);
+        }
+
+        public virtual async Task<List<ProjectWithoutDetailsDto>> GetProjectsAsync()
+        {
+            var projects = await _projectRepository.GetListWithoutDetailsAsync();
+            return ObjectMapper.Map<List<ProjectWithoutDetails>, List<ProjectWithoutDetailsDto>>(projects);
+        }
+
 
         private async Task UpdateDocumentUpdateInfoCache(Document document)
         {

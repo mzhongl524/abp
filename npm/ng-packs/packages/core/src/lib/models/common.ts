@@ -1,22 +1,65 @@
-import { EventEmitter } from '@angular/core';
-import { Router } from '@angular/router';
+import { EventEmitter, Type } from '@angular/core';
+import { Routes } from '@angular/router';
 import { Subject } from 'rxjs';
 import { eLayoutType } from '../enums/common';
-import { Config } from './config';
+import { Environment } from './environment';
 
 export namespace ABP {
   export interface Root {
-    environment: Partial<Config.Environment>;
-    /**
-     *
-     * @deprecated To be deleted in v3.0
-     */
-    requirements?: Config.Requirements;
+    environment: Partial<Environment>;
+    registerLocaleFn: (locale: string) => Promise<any>;
     skipGetAppConfiguration?: boolean;
+    skipInitAuthService?: boolean;
+    sendNullsAsQueryParam?: boolean;
+    tenantKey?: string;
+    localizations?: Localization[];
+    othersGroup?: string;
+    dynamicLayouts?: Map<string, string>;
+    disableProjectNameInTitle?: boolean;
+    uiLocalization?: UILocalizationOptions;
   }
 
-  export interface Test {
-    baseHref?: Router;
+  export interface UILocalizationOptions {
+    /**
+     * Enable UI localization feature
+     * When enabled, localization files are automatically loaded based on selected language
+     * Files should be located at: {basePath}/{culture}.json
+     * Example: /assets/localization/en.json
+     * JSON format: { "ResourceName": { "Key": "Value" } }
+     * Merges with backend localizations (UI > Backend priority)
+     */
+    enabled?: boolean;
+    /**
+     * Base path for localization JSON files
+     * Default: '/assets/localization'
+     * Files should be located at: {basePath}/{culture}.json
+     * Example: /assets/localization/en.json
+     */
+    basePath?: string;
+  }
+
+  export interface Child {
+    localizations?: Localization[];
+  }
+
+  export interface Localization {
+    culture: string;
+    resources: LocalizationResource[];
+  }
+
+  export interface LocalizationResource {
+    resourceName: string;
+    texts: Record<string, string>;
+  }
+
+  export interface HasPolicy {
+    requiredPolicy?: string;
+  }
+
+  export interface Test extends Partial<Root> {
+    baseHref?: string;
+    listQueryDebounceTime?: number;
+    routes?: Routes;
   }
 
   export type PagedResponse<T> = {
@@ -34,21 +77,29 @@ export namespace ABP {
     maxResultCount?: number;
   }
 
-  export interface Route {
-    children?: Route[];
-    invisible?: boolean;
-    layout?: eLayoutType;
-    name: string;
-    order?: number;
-    parentName?: string;
-    path: string;
-    requiredPolicy?: string;
-    iconClass?: string;
+  export interface Lookup {
+    id: string;
+    displayName: string;
   }
 
-  export interface FullRoute extends Route {
-    url?: string;
-    wrapper?: boolean;
+  export interface Nav {
+    name: string;
+    parentName?: string;
+    requiredPolicy?: string;
+    order?: number;
+    invisible?: boolean;
+  }
+
+  export interface Route extends Nav {
+    path?: string;
+    layout?: eLayoutType;
+    iconClass?: string;
+    group?: string;
+    breadcrumbText?: string;
+  }
+
+  export interface Tab extends Nav {
+    component: Type<any>;
   }
 
   export interface BasicItem {
@@ -65,7 +116,6 @@ export namespace ABP {
     [key: string]: T;
   }
 
-  export type ExtractFromOutput<
-    T extends EventEmitter<any> | Subject<any>
-  > = T extends EventEmitter<infer X> ? X : T extends Subject<infer Y> ? Y : never;
+  export type ExtractFromOutput<T extends EventEmitter<any> | Subject<any>> =
+    T extends EventEmitter<infer X> ? X : T extends Subject<infer Y> ? Y : never;
 }

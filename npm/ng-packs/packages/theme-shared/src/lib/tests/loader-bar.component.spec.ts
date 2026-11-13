@@ -1,93 +1,164 @@
-import { Router, RouteReuseStrategy, NavigationStart, NavigationEnd, NavigationError } from '@angular/router';
-import { createHostFactory, SpectatorHost, SpyObject } from '@ngneat/spectator/jest';
-import { Actions, NgxsModule, Store } from '@ngxs/store';
-import { Subject, Subscription, Observable, Subscriber, timer } from 'rxjs';
-import { LoaderBarComponent } from '../components/loader-bar/loader-bar.component';
-import { StartLoader, StopLoader } from '@abp/ng.core';
+import { HttpWaitService, LOADER_DELAY, RouterWaitService, SubscriptionService } from '@abp/ng.core';
 import { HttpRequest } from '@angular/common/http';
+import { NavigationStart, Router } from '@angular/router';
+import { createComponentFactory, Spectator } from '@ngneat/spectator/vitest';
+import { combineLatest, firstValueFrom, Subject, timer } from 'rxjs';
+import { LoaderBarComponent } from '../components/loader-bar/loader-bar.component';
+import { setupComponentResources, setInputSignal } from './utils';
+
 
 describe('LoaderBarComponent', () => {
-  let spectator: SpectatorHost<LoaderBarComponent>;
-  let router: SpyObject<Router>;
+  let spectator: Spectator<LoaderBarComponent>;
+  let router: Router;
+  let createComponent: ReturnType<typeof createComponentFactory<LoaderBarComponent>>;
   const events$ = new Subject();
 
-  const createHost = createHostFactory({
-    component: LoaderBarComponent,
-    mocks: [Router],
-    imports: [NgxsModule.forRoot()],
-    detectChanges: false,
-  });
+  beforeAll(() => setupComponentResources('../components/loader-bar', import.meta.url));
 
   beforeEach(() => {
-    spectator = createHost('<abp-loader-bar></abp-loader-bar>');
+    if (!createComponent) {
+      createComponent = createComponentFactory({
+        component: LoaderBarComponent,
+        detectChanges: false,
+        providers: [
+          SubscriptionService,
+          { provide: Router, useValue: { events: events$ } },
+          { provide: LOADER_DELAY, useValue: 0 },
+        ],
+      });
+    }
+
+    spectator = createComponent({});
     spectator.component.intervalPeriod = 1;
     spectator.component.stopDelay = 1;
-    router = spectator.get(Router);
-    (router as any).events = events$;
+    router = spectator.inject(Router);
   });
 
   it('should initial variable values are correct', () => {
-    spectator.component.interval = new Subscription();
-    expect(spectator.component.containerClass).toBe('abp-loader-bar');
-    expect(spectator.component.color).toBe('#77b6ff');
+    expect(spectator.component.containerClass()).toBe('abp-loader-bar');
+    expect(spectator.component.color()).toBe('#77b6ff');
   });
 
-  it('should increase the progressLevel', done => {
+  it('should increase the progressLevel', async () => {
     spectator.detectChanges();
-    spectator.get(Store).dispatch(new StartLoader(new HttpRequest('GET', 'test')));
+    const httpWaitService = spectator.inject(HttpWaitService);
+    httpWaitService.addRequest(new HttpRequest('GET', 'test'));
     spectator.detectChanges();
-    setTimeout(() => {
-      expect(spectator.component.progressLevel > 0).toBeTruthy();
-      done();
-    }, 10);
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(spectator.component.progressLevel()).toBeGreaterThan(0);
   });
 
-  test.skip('should be interval unsubscribed', done => {
+
+  it('should be interval unsubscribed', async () => {
+    const request = new HttpRequest('GET', 'test');
     spectator.detectChanges();
-    spectator.get(Store).dispatch(new StartLoader(new HttpRequest('GET', 'test')));
+    const httpWaitService = spectator.inject(HttpWaitService);
+    
+    await firstValueFrom(combineLatest([
+      httpWaitService.getLoading$(),
+      spectator.inject(RouterWaitService).getLoading$()
+    ]));
+    
+    httpWaitService.addRequest(request);
+    spectator.detectChanges();
+    
+    let attempts = 0;
+    while (spectator.component.interval.closed && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      spectator.detectChanges();
+      attempts++;
+    }
+    
+    expect(spectator.component.interval.closed).toBe(false);
+    
+    httpWaitService.deleteRequest(request);
+    spectator.detectChanges();
+    
+    await firstValueFrom(timer(400));
+    
+    expect(spectator.component.interval.closed).toBe(true);
+  });
+
+
+  it('should start and stop the loading with navigation', async () => {
+    spectator.detectChanges();
+    const routerWaitService = spectator.inject(RouterWaitService);
+    
+    routerWaitService.setLoading(true);
+    spectator.detectChanges();
+    
+    let attempts = 0;
+    while (spectator.component.interval.closed && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      spectator.detectChanges();
+      attempts++;
+    }
     expect(spectator.component.interval.closed).toBe(false);
 
-    timer(400).subscribe(() => {
-      expect(spectator.component.interval.closed).toBe(true);
-      done();
-    });
+    routerWaitService.setLoading(false);
+    spectator.detectChanges();
+    
+    attempts = 0;
+    while (spectator.component.progressLevel() !== 100 && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      spectator.detectChanges();
+      attempts++;
+    }
+    expect(spectator.component.progressLevel()).toBe(100);
+
+    await firstValueFrom(timer(spectator.component.stopDelay + 10));
+    expect(spectator.component.progressLevel()).toBe(0);
   });
 
-  it('should start and stop the loading with navigation', done => {
+  it('should stop the loading with navigation', async () => {
     spectator.detectChanges();
-    (router as any).events.next(new NavigationStart(1, 'test'));
+    const routerWaitService = spectator.inject(RouterWaitService);
+    
+    routerWaitService.setLoading(true);
+    spectator.detectChanges();
+    
+    let attempts = 0;
+    while (spectator.component.interval.closed && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      spectator.detectChanges();
+      attempts++;
+    }
     expect(spectator.component.interval.closed).toBe(false);
 
-    (router as any).events.next(new NavigationEnd(1, 'test', 'test'));
-    (router as any).events.next(new NavigationError(1, 'test', 'test'));
-    expect(spectator.component.progressLevel).toBe(100);
-
-    timer(2).subscribe(() => {
-      expect(spectator.component.progressLevel).toBe(0);
-      done();
-    });
-  });
-
-  it('should stop the loading with navigation', done => {
+    routerWaitService.setLoading(false);
     spectator.detectChanges();
-    (router as any).events.next(new NavigationStart(1, 'test'));
-    expect(spectator.component.interval.closed).toBe(false);
+    
+    attempts = 0;
+    while (spectator.component.progressLevel() !== 100 && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      spectator.detectChanges();
+      attempts++;
+    }
+    expect(spectator.component.progressLevel()).toBe(100);
 
-    spectator.get(Store).dispatch(new StopLoader(new HttpRequest('GET', 'test')));
-    expect(spectator.component.progressLevel).toBe(100);
-
-    timer(2).subscribe(() => {
-      expect(spectator.component.progressLevel).toBe(0);
-      done();
-    });
+    await firstValueFrom(timer(spectator.component.stopDelay + 10));
+    expect(spectator.component.progressLevel()).toBe(0);
   });
 
   describe('#startLoading', () => {
-    it('should return when isLoading is true', done => {
+    it('should return when isLoading is true', async () => {
       spectator.detectChanges();
-      (router as any).events.next(new NavigationStart(1, 'test'));
-      (router as any).events.next(new NavigationStart(1, 'test'));
-      done();
+      
+      events$.next(new NavigationStart(1, 'test'));
+      spectator.detectChanges();
+      
+      let attempts = 0;
+      while (spectator.component.interval.closed && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        spectator.detectChanges();
+        attempts++;
+      }
+      
+      events$.next(new NavigationStart(1, 'test'));
+      spectator.detectChanges();
+      
+      expect(spectator.component).toBeTruthy();
     });
   });
 });

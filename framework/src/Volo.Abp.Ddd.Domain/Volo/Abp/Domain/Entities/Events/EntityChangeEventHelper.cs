@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
-using Volo.Abp.Auditing;
+using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.Domain.Entities.Events.Distributed;
 using Volo.Abp.DynamicProxy;
@@ -10,194 +12,197 @@ using Volo.Abp.EventBus.Distributed;
 using Volo.Abp.EventBus.Local;
 using Volo.Abp.Uow;
 
-namespace Volo.Abp.Domain.Entities.Events
+namespace Volo.Abp.Domain.Entities.Events;
+
+/// <summary>
+/// Used to trigger entity change events.
+/// </summary>
+public class EntityChangeEventHelper : IEntityChangeEventHelper, ITransientDependency
 {
-    /// <summary>
-    /// Used to trigger entity change events.
-    /// </summary>
-    public class EntityChangeEventHelper : IEntityChangeEventHelper, ITransientDependency
+    private const string UnitOfWorkEventRecordEntityPropName = "_Abp_Entity";
+
+    // Holds each constructor, so its compiled invoke stub stays alive. With Activator.CreateInstance, once many entity
+    // types are in use, a GC can drop the stub, and it is generated and compiled again on the next call.
+    private static readonly ConditionalWeakTable<Type, Func<object, object>> EventDataFactories = new();
+
+    public ILogger<EntityChangeEventHelper> Logger { get; set; }
+    public ILocalEventBus LocalEventBus { get; set; }
+    public IDistributedEventBus DistributedEventBus { get; set; }
+
+    protected IUnitOfWorkManager UnitOfWorkManager { get; }
+    protected IEntityToEtoMapper EntityToEtoMapper { get; }
+    protected AbpDistributedEntityEventOptions DistributedEntityEventOptions { get; }
+
+    public EntityChangeEventHelper(
+        IUnitOfWorkManager unitOfWorkManager,
+        IEntityToEtoMapper entityToEtoMapper,
+        IOptions<AbpDistributedEntityEventOptions> distributedEntityEventOptions)
     {
-        public ILocalEventBus LocalEventBus { get; set; }
-        public IDistributedEventBus DistributedEventBus { get; set; }
+        UnitOfWorkManager = unitOfWorkManager;
+        EntityToEtoMapper = entityToEtoMapper;
+        DistributedEntityEventOptions = distributedEntityEventOptions.Value;
 
-        protected IUnitOfWorkManager UnitOfWorkManager { get; }
-        protected IEntityToEtoMapper EntityToEtoMapper { get; }
+        LocalEventBus = NullLocalEventBus.Instance;
+        DistributedEventBus = NullDistributedEventBus.Instance;
+        Logger = NullLogger<EntityChangeEventHelper>.Instance;
+    }
 
-        public EntityChangeEventHelper(
-            IUnitOfWorkManager unitOfWorkManager,
-            IEntityToEtoMapper entityToEtoMapper)
+    public virtual void PublishEntityCreatedEvent(object entity)
+    {
+        TriggerEventWithEntity(
+            LocalEventBus,
+            typeof(EntityCreatedEventData<>),
+            entity,
+            entity
+        );
+
+        if (ShouldPublishDistributedEventForEntity(entity))
         {
-            UnitOfWorkManager = unitOfWorkManager;
-            EntityToEtoMapper = entityToEtoMapper;
-
-            LocalEventBus = NullLocalEventBus.Instance;
-            DistributedEventBus = NullDistributedEventBus.Instance;
-        }
-
-        public async Task TriggerEventsAsync(EntityChangeReport changeReport)
-        {
-            await TriggerEventsInternalAsync(changeReport);
-
-            if (changeReport.IsEmpty() || UnitOfWorkManager.Current == null)
-            {
-                return;
-            }
-
-            await UnitOfWorkManager.Current.SaveChangesAsync();
-        }
-
-        public virtual async Task TriggerEntityCreatingEventAsync(object entity)
-        {
-            await TriggerEventWithEntity(
-                LocalEventBus,
-                typeof(EntityCreatingEventData<>),
-                entity,
-                true
-            );
-        }
-
-        public virtual async Task TriggerEntityCreatedEventOnUowCompletedAsync(object entity)
-        {
-            await TriggerEventWithEntity(
-                LocalEventBus,
-                typeof(EntityCreatedEventData<>),
-                entity,
-                false
-            );
-
             var eto = EntityToEtoMapper.Map(entity);
             if (eto != null)
             {
-                await TriggerEventWithEntity(
+                TriggerEventWithEntity(
                     DistributedEventBus,
                     typeof(EntityCreatedEto<>),
                     eto,
-                    false
+                    entity
                 );
             }
         }
+    }
 
-        public virtual async Task TriggerEntityUpdatingEventAsync(object entity)
+    private bool ShouldPublishDistributedEventForEntity(object entity)
+    {
+        var entityType = ProxyHelper.UnProxy(entity).GetType();
+        return !DistributedEntityEventOptions.IgnoredEventSelectors.IsMatch(entityType) &&
+               DistributedEntityEventOptions.AutoEventSelectors.IsMatch(entityType);
+    }
+
+    public virtual void PublishEntityUpdatedEvent(object entity)
+    {
+        TriggerEventWithEntity(
+            LocalEventBus,
+            typeof(EntityUpdatedEventData<>),
+            entity,
+            entity
+        );
+
+        if (ShouldPublishDistributedEventForEntity(entity))
         {
-            await TriggerEventWithEntity(
-                LocalEventBus,
-                typeof(EntityUpdatingEventData<>),
-                entity,
-                true
-            );
-        }
-
-        public virtual async Task TriggerEntityUpdatedEventOnUowCompletedAsync(object entity)
-        {
-            await TriggerEventWithEntity(
-                LocalEventBus,
-                typeof(EntityUpdatedEventData<>),
-                entity,
-                false
-            );
-
             var eto = EntityToEtoMapper.Map(entity);
             if (eto != null)
             {
-                await TriggerEventWithEntity(
+                TriggerEventWithEntity(
                     DistributedEventBus,
                     typeof(EntityUpdatedEto<>),
                     eto,
-                    false
+                    entity
                 );
             }
         }
+    }
 
-        public virtual async Task TriggerEntityDeletingEventAsync(object entity)
+    public virtual void PublishEntityDeletedEvent(object entity)
+    {
+        TriggerEventWithEntity(
+            LocalEventBus,
+            typeof(EntityDeletedEventData<>),
+            entity,
+            entity
+        );
+
+        if (ShouldPublishDistributedEventForEntity(entity))
         {
-            await TriggerEventWithEntity(
-                LocalEventBus,
-                typeof(EntityDeletingEventData<>),
-                entity,
-                true
-            );
-        }
-
-        public virtual async Task TriggerEntityDeletedEventOnUowCompletedAsync(object entity)
-        {
-            await TriggerEventWithEntity(
-                LocalEventBus,
-                typeof(EntityDeletedEventData<>),
-                entity,
-                false
-            );
-
             var eto = EntityToEtoMapper.Map(entity);
             if (eto != null)
             {
-                await TriggerEventWithEntity(
+                TriggerEventWithEntity(
                     DistributedEventBus,
                     typeof(EntityDeletedEto<>),
-                    EntityToEtoMapper.Map(entity),
-                    false
+                    eto,
+                    entity
                 );
             }
         }
+    }
 
-        protected virtual async Task TriggerEventsInternalAsync(EntityChangeReport changeReport)
+    protected virtual void TriggerEventWithEntity(
+        IEventBus eventPublisher,
+        Type genericEventType,
+        object entityOrEto,
+        object originalEntity)
+    {
+        var entityType = ProxyHelper.UnProxy(entityOrEto).GetType();
+        var eventType = genericEventType.MakeGenericType(entityType);
+        var eventData = CreateEventData(eventType, entityOrEto);
+        var currentUow = UnitOfWorkManager.Current;
+
+        if (currentUow == null)
         {
-            await TriggerEntityChangeEvents(changeReport.ChangedEntities);
-            await TriggerLocalEvents(changeReport.DomainEvents);
-            await TriggerDistributedEvents(changeReport.DistributedEvents);
+            Logger.LogWarning("UnitOfWorkManager.Current is null! Can not publish the event.");
+            return;
         }
 
-        protected virtual async Task TriggerEntityChangeEvents(List<EntityChangeEntry> changedEntities)
+        var eventRecord = new UnitOfWorkEventRecord(eventType, eventData, EventOrderGenerator.GetNext())
         {
-            foreach (var changedEntity in changedEntities)
-            {
-                switch (changedEntity.ChangeType)
+            Properties =
                 {
-                    case EntityChangeType.Created:
-                        await TriggerEntityCreatingEventAsync(changedEntity.Entity);
-                        await TriggerEntityCreatedEventOnUowCompletedAsync(changedEntity.Entity);
-                        break;
-                    case EntityChangeType.Updated:
-                        await TriggerEntityUpdatingEventAsync(changedEntity.Entity);
-                        await TriggerEntityUpdatedEventOnUowCompletedAsync(changedEntity.Entity);
-                        break;
-                    case EntityChangeType.Deleted:
-                        await TriggerEntityDeletingEventAsync(changedEntity.Entity);
-                        await TriggerEntityDeletedEventOnUowCompletedAsync(changedEntity.Entity);
-                        break;
-                    default:
-                        throw new AbpException("Unknown EntityChangeType: " + changedEntity.ChangeType);
+                    { UnitOfWorkEventRecordEntityPropName, originalEntity },
                 }
-            }
-        }
+        };
 
-        protected virtual async Task TriggerLocalEvents(List<DomainEventEntry> localEvents)
+        /* We are trying to eliminate same events for the same entity.
+         * In this way, for example, we don't trigger update event for an entity multiple times
+         * even if it is updated multiple times in the current UOW.
+         */
+
+        if (eventPublisher == DistributedEventBus)
         {
-            foreach (var localEvent in localEvents)
-            {
-                await LocalEventBus.PublishAsync(localEvent.EventData.GetType(), localEvent.EventData);
-            }
+            currentUow.AddOrReplaceDistributedEvent(
+                eventRecord,
+                otherRecord => IsSameEntityEventRecord(eventRecord, otherRecord)
+            );
         }
-
-        protected virtual async Task TriggerDistributedEvents(List<DomainEventEntry> distributedEvents)
+        else
         {
-            foreach (var distributedEvent in distributedEvents)
-            {
-                await DistributedEventBus.PublishAsync(distributedEvent.EventData.GetType(), distributedEvent.EventData);
-            }
+            currentUow.AddOrReplaceLocalEvent(
+                eventRecord,
+                otherRecord => IsSameEntityEventRecord(eventRecord, otherRecord)
+            );
         }
+    }
 
-        protected virtual async Task TriggerEventWithEntity(IEventBus eventPublisher, Type genericEventType, object entity, bool triggerInCurrentUnitOfWork)
+    private static object CreateEventData(Type eventType, object entityOrEto)
+    {
+        return EventDataFactories.GetValue(eventType, static type =>
         {
-            var entityType = ProxyHelper.UnProxy(entity).GetType();
-            var eventType = genericEventType.MakeGenericType(entityType);
-
-            if (triggerInCurrentUnitOfWork || UnitOfWorkManager.Current == null)
+            var constructors = type.GetConstructors();
+            if (constructors.Length != 1 ||
+                Array.Exists(constructors[0].GetParameters(), static parameter => parameter.IsDefined(typeof(ParamArrayAttribute), false)))
             {
-                await eventPublisher.PublishAsync(eventType, Activator.CreateInstance(eventType, entity));
-                return;
+                return entity => Activator.CreateInstance(type, entity)!;
             }
 
-            UnitOfWorkManager.Current.OnCompleted(() => eventPublisher.PublishAsync(eventType, Activator.CreateInstance(eventType, entity)));
+            var constructor = constructors[0];
+            return entity => constructor.Invoke(new[] { entity });
+        })(entityOrEto);
+    }
+
+    public bool IsSameEntityEventRecord(UnitOfWorkEventRecord record1, UnitOfWorkEventRecord record2)
+    {
+        if (record1.EventType != record2.EventType)
+        {
+            return false;
         }
+
+        var record1OriginalEntity = record1.Properties.GetOrDefault(UnitOfWorkEventRecordEntityPropName) as IEntity;
+        var record2OriginalEntity = record2.Properties.GetOrDefault(UnitOfWorkEventRecordEntityPropName) as IEntity;
+
+        if (record1OriginalEntity == null || record2OriginalEntity == null)
+        {
+            return false;
+        }
+
+        return EntityHelper.EntityEquals(record1OriginalEntity, record2OriginalEntity);
     }
 }

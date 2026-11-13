@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using MongoDB.Driver;
 using MongoDB.Driver.Linq;
 using Volo.Abp.Domain.Repositories.MongoDB;
@@ -15,33 +17,33 @@ namespace Volo.Blogging.Comments
         {
         }
 
-        public async Task<List<Comment>> GetListOfPostAsync(Guid postId)
+        public virtual async Task<List<Comment>> GetListOfPostAsync(Guid postId, CancellationToken cancellationToken = default)
         {
-            return await GetMongoQueryable()
+            return await (await GetQueryableAsync(cancellationToken))
                 .Where(a => a.PostId == postId)
                 .OrderBy(a => a.CreationTime)
-                .ToListAsync();
+                .ToListAsync(GetCancellationToken(cancellationToken));
         }
 
-        public async Task<int> GetCommentCountOfPostAsync(Guid postId)
+        public virtual async Task<int> GetCommentCountOfPostAsync(Guid postId, CancellationToken cancellationToken = default)
         {
-            return await GetMongoQueryable()
-                .CountAsync(a => a.PostId == postId);
+            return await (await GetQueryableAsync(cancellationToken))
+                .CountAsync(a => a.PostId == postId, GetCancellationToken(cancellationToken));
         }
 
-        public async Task<List<Comment>> GetRepliesOfComment(Guid id)
+        public virtual async Task<List<Comment>> GetRepliesOfComment(Guid id, CancellationToken cancellationToken = default)
         {
-            return await GetMongoQueryable()
-                .Where(a => a.RepliedCommentId == id).ToListAsync();
+            return await (await GetQueryableAsync(cancellationToken))
+                .Where(a => a.RepliedCommentId == id).ToListAsync(GetCancellationToken(cancellationToken));
         }
 
-        public async Task DeleteOfPost(Guid id)
+        public virtual async Task DeleteOfPost(Guid id, CancellationToken cancellationToken = default)
         {
-            var recordsToDelete = GetMongoQueryable().Where(pt => pt.PostId == id);
+            var recordsToDelete = (await GetQueryableAsync(cancellationToken)).Where(pt => pt.PostId == id);
 
             foreach (var record in recordsToDelete)
             {
-                await DeleteAsync(record);
+                await DeleteAsync(record, cancellationToken: GetCancellationToken(cancellationToken));
             }
         }
     }

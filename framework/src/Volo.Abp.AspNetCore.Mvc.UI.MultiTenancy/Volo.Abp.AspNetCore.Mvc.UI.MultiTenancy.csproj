@@ -4,7 +4,9 @@
   <Import Project="..\..\..\common.props" />
 
   <PropertyGroup>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <WarningsAsErrors>Nullable</WarningsAsErrors>
     <AddRazorSupportForMvc>true</AddRazorSupportForMvc>
     <AssemblyName>Volo.Abp.AspNetCore.Mvc.UI.MultiTenancy</AssemblyName>
     <PackageId>Volo.Abp.AspNetCore.Mvc.UI.MultiTenancy</PackageId>
@@ -18,12 +20,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Pages\**\*.cshtml" />
     <EmbeddedResource Include="Pages\**\*.js" />
     <EmbeddedResource Include="Volo\Abp\AspNetCore\Mvc\UI\MultiTenancy\Localization\*.json" />
-    <Content Remove="Pages\**\*.cshtml" />
+    <EmbeddedResource Include="Components\**\*.js" />
+    <EmbeddedResource Include="Components\**\*.css" />
     <Content Remove="Pages\**\*.js" />
     <Content Remove="Volo\Abp\AspNetCore\Mvc\UI\MultiTenancy\Localization\*.json" />
+    <Content Remove="Components\**\*.js" />
+    <Content Remove="Components\**\*.css" />
   </ItemGroup>
 
   <ItemGroup>

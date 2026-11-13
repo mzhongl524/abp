@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using Volo.Abp.MongoDB;
 using Volo.Abp.Users.MongoDB;
 using Volo.Blogging.MongoDB;
@@ -15,16 +16,19 @@ namespace Volo.Blogging.Users
         {
         }
 
-        public async Task<List<BlogUser>> GetUsersAsync(int maxCount, string filter, CancellationToken cancellationToken)
+        public virtual async Task<List<BlogUser>> GetUsersAsync(int maxCount, string filter, CancellationToken cancellationToken = default)
         {
-            var query = GetMongoQueryable();
+            var query = await GetQueryableAsync(cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(filter))
             {
                 query = query.Where(x => x.UserName.Contains(filter));
             }
 
-            return await query.Take(maxCount).ToListAsync(cancellationToken);
+            return await query
+                .OrderBy(x => x.UserName)
+                .Take(maxCount)
+                .ToListAsync(GetCancellationToken(cancellationToken));
         }
     }
 }

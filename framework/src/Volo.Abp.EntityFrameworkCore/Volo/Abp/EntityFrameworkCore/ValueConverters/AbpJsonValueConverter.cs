@@ -1,27 +1,36 @@
-﻿using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using Newtonsoft.Json;
-using Volo.Abp.Data;
+﻿using System.Text.Json;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Volo.Abp.Json.SystemTextJson.JsonConverters;
 
-namespace Volo.Abp.EntityFrameworkCore.ValueConverters
+namespace Volo.Abp.EntityFrameworkCore.ValueConverters;
+
+public class AbpJsonValueConverter<TPropertyType> : ValueConverter<TPropertyType, string>
 {
-    public class AbpJsonValueConverter<TPropertyType> : ValueConverter<TPropertyType, string>
+    public AbpJsonValueConverter()
+        : base(
+            d => SerializeObject(d),
+            s => DeserializeObject(s))
     {
-        public AbpJsonValueConverter()
-            : base(
-                d => SerializeObject(d),
-                s => DeserializeObject(s))
-        {
 
-        }
+    }
 
-        private static string SerializeObject(TPropertyType d)
-        {
-            return JsonConvert.SerializeObject(d, Formatting.None);
-        }
+    public readonly static JsonSerializerOptions SerializeOptions = new JsonSerializerOptions();
 
-        private static TPropertyType DeserializeObject(string s)
+    private static string SerializeObject(TPropertyType d)
+    {
+        return JsonSerializer.Serialize(d, SerializeOptions);
+    }
+
+    public readonly static JsonSerializerOptions DeserializeOptions = new JsonSerializerOptions()
+    {
+        Converters =
         {
-            return JsonConvert.DeserializeObject<TPropertyType>(s);
+            new ObjectToInferredTypesConverter()
         }
+    };
+
+    private static TPropertyType DeserializeObject(string s)
+    {
+        return JsonSerializer.Deserialize<TPropertyType>(s, DeserializeOptions)!;
     }
 }

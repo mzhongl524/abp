@@ -2,7 +2,6 @@ export default `
 .content-header-title {
     font-size: 24px;
 }
-
 .entry-row {
     margin-bottom: 15px;
 }
@@ -26,17 +25,30 @@ export default `
     border-radius: 0.25rem;
     min-height: 44px;
 }
+[dir=rtl] .navbar .dropdown-menu a {
+    text-align: right!important;
+}
 .navbar .dropdown-submenu a::after {
     transform: rotate(-90deg);
     position: absolute;
     right: 16px;
     top: 18px;
 }
+[dir=rtl] .navbar .dropdown-submenu a::after {
+    transform: rotate(90deg);
+    left: 16px;
+    right: auto;
+    top: 20px;
+}
 .navbar .dropdown-submenu .dropdown-menu {
     top: 0;
     left: 100%;
 }
-
+/* work around for rtl. Track https://github.com/ng-bootstrap/ng-bootstrap/issues/4100 issue */
+[dir=rtl] .navbar .dropdown-submenu .dropdown-menu {
+    top: 0;
+    right: 100%;
+}
 .card-header .btn {
     padding: 2px 6px;
 }
@@ -46,7 +58,7 @@ export default `
 .container > .card {
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075) !important;
 }
-@media screen and (min-width: 768px) {
+@media screen and (min-width: 992px) {
     .navbar .dropdown:hover > .dropdown-menu {
         display: block;
     }
@@ -65,7 +77,7 @@ export default `
     border: 1px solid #c8c8c8;
   }
 .abp-loading {
-    background: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.05);
 }
 .modal-backdrop {
 background-color: rgba(0, 0, 0, 0.6);
@@ -127,4 +139,44 @@ background-color: rgba(0, 0, 0, 0.6);
     background-color: #f4f4f4;
     border: 1px solid #c8c8c8;
 }
+.bordered .datatable-body-row {
+    border-top: 1px solid #eee;
+    margin-top: -1px;
+}
+.breadcrumb {
+    background-color: transparent;
+    padding: 0.27rem;
+}
+
+.abp-md-form {
+    max-width: 540px;
+}
+
+abp-chat-icon,
+abp-back-to-impersonator-nav-item {
+    margin-inline: 0.4rem;
+}
+
+abp-chat-icon {
+    .fa-comments:before {
+        color: var(--bs-navbar-color);
+    }
+}
+
+abp-back-to-impersonator-nav-item {
+    .fa-undo {
+        color: var(--bs-navbar-color);
+    }
+}
+
+.ngx-datatable.material:has(.datatable-body-row) .datatable-footer {
+  border-top: none;
+}
+
+.ngx-datatable.material:not(:has(.datatable-body-row)) .datatable-footer {
+  border-top: 1px solid #dee2e6;
+}
+
 `;
+
+

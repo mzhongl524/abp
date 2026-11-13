@@ -1,16 +1,18 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using Volo.Abp.AspNetCore.Mvc.UI.RazorPages;
+using Volo.Abp.Validation;
 using Volo.Blogging.Blogs;
 using Volo.Blogging.Blogs.Dtos;
+using Volo.Blogging.Pages.Blogs.Shared.Helpers;
 using Volo.Blogging.Posts;
 
-namespace Volo.Blogging.Pages.Blog.Posts
+namespace Volo.Blogging.Pages.Blogs.Posts
 {
     public class NewModel : BloggingPageModel
     {
@@ -41,8 +43,14 @@ namespace Volo.Blogging.Pages.Blog.Posts
             {
                 return Redirect("/");
             }
+            if (BlogNameControlHelper.IsProhibitedFileFormatName(BlogShortName))
+            {
+                return NotFound();
+            }
 
-            Blog = await _blogAppService.GetByShortNameAsync(BlogShortName);
+            Blog = await GetBlogAsync(_blogAppService, _blogOptions, BlogShortName);
+            BlogShortName = Blog.ShortName;
+            
             Post = new CreatePostViewModel
             {
                 BlogId = Blog.Id
@@ -60,11 +68,21 @@ namespace Volo.Blogging.Pages.Blog.Posts
                 Post.Description = Post.Content.Truncate(PostConsts.MaxSeoFriendlyDescriptionLength);
             }
 
+            Post.Url = WebUtility.UrlEncode(Post.Url);
+            
             var postWithDetailsDto = await _postAppService.CreateAsync(ObjectMapper.Map<CreatePostViewModel, CreatePostDto>(Post));
 
-            //TODO: Try Url.Page(...)
-            var urlPrefix = _blogOptions.RoutePrefix;
-            return Redirect(Url.Content($"~{urlPrefix}{WebUtility.UrlEncode(blog.ShortName)}/{WebUtility.UrlEncode(postWithDetailsDto.Url)}"));
+            Dictionary<string, object> routeValues = new()
+            {
+                { nameof(DetailModel.PostUrl), postWithDetailsDto.Url }
+            };
+
+            if (!_blogOptions.SingleBlogMode.Enabled)
+            {
+                routeValues.Add(nameof(DetailModel.BlogShortName), blog.ShortName);
+            }
+            
+            return RedirectToPage("/Blogs/Posts/Detail", routeValues);
         }
 
         public class CreatePostViewModel
@@ -74,7 +92,7 @@ namespace Volo.Blogging.Pages.Blog.Posts
             public Guid BlogId { get; set; }
 
             [Required]
-            [StringLength(PostConsts.MaxTitleLength)]
+            [DynamicStringLength(typeof(PostConsts), nameof(PostConsts.MaxTitleLength))]
             public string Title { get; set; }
 
             [Required]
@@ -82,16 +100,17 @@ namespace Volo.Blogging.Pages.Blog.Posts
             public string CoverImage { get; set; }
 
             [Required]
-            [StringLength(PostConsts.MaxUrlLength)]
+            [DynamicStringLength(typeof(PostConsts), nameof(PostConsts.MaxUrlLength))]
             public string Url { get; set; }
 
+            [Required]
             [HiddenInput]
-            [StringLength(PostConsts.MaxContentLength)]
+            [DynamicStringLength(typeof(PostConsts), nameof(PostConsts.MaxContentLength))]
             public string Content { get; set; }
 
             public string Tags { get; set; }
 
-            [StringLength(PostConsts.MaxDescriptionLength)]
+            [DynamicStringLength(typeof(PostConsts), nameof(PostConsts.MaxDescriptionLength))]
             public string Description { get; set; }
 
         }

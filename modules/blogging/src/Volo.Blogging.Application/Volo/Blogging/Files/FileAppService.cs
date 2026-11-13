@@ -1,10 +1,15 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
+using System.Net.Mime;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Authorization;
+using SkiaSharp;
 using Volo.Abp;
+using Volo.Abp.Authorization;
+using Volo.Abp.BlobStoring;
+using Volo.Abp.Content;
 using Volo.Abp.Validation;
 using Volo.Blogging.Areas.Blog.Helpers;
 
@@ -12,73 +17,116 @@ namespace Volo.Blogging.Files
 {
     public class FileAppService : BloggingAppServiceBase, IFileAppService
     {
-        public BlogFileOptions Options { get; }
-        private readonly ILogger<FileAppService> _logger;
+        protected IBlobContainer<BloggingFileContainer> BlobContainer { get; }
 
-        public FileAppService(IOptions<BlogFileOptions> options, ILogger<FileAppService> logger)
+        public FileAppService(
+            IBlobContainer<BloggingFileContainer> blobContainer)
         {
-            _logger = logger;
-            Options = options.Value;
+            BlobContainer = blobContainer;
         }
 
-        public virtual Task<RawFileDto> GetAsync(string name)
+        public virtual async Task<RawFileDto> GetAsync(string name)
         {
-            Check.NotNullOrWhiteSpace(name, nameof(name));
+            ValidateFileName(name);
 
-            if (!Directory.Exists(Options.FileUploadLocalFolder))
+            return new RawFileDto
             {
-                Directory.CreateDirectory(Options.FileUploadLocalFolder);
-                return Task.FromResult(
-                    new RawFileDto
-                    {
-                        Bytes = new byte[0]
-                    }
-                );
-            }
-
-            var filePath = Path.Combine(Options.FileUploadLocalFolder, name);
-
-            if (File.Exists(filePath))
-            {
-                return Task.FromResult(new RawFileDto {Bytes = File.ReadAllBytes(filePath)});
-            }
-
-            _logger.LogError($"Cannot find the file {filePath}");
-            return Task.FromResult(RawFileDto.EmptyResult());
+                Bytes = await BlobContainer.GetAllBytesAsync(name)
+            };
         }
 
-        public virtual Task<FileUploadOutputDto> CreateAsync(FileUploadInputDto input)
+        public virtual async Task<IRemoteStreamContent> GetFileAsync(string name)
         {
-            if (input.Bytes.IsNullOrEmpty())
+            ValidateFileName(name);
+
+            var fileStream = await BlobContainer.GetAsync(name);
+            return new RemoteStreamContent(fileStream, name, GetContentType(Path.GetExtension(name)), disposeStream: true);
+        }
+
+        protected virtual void ValidateFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) ||
+                name.IndexOfAny(new[] { '/', '\\' }) >= 0 ||
+                name == "." ||
+                name == "..")
             {
-                ThrowValidationException("Bytes can not be null or empty!", "Bytes");
+                ThrowValidationException("Invalid file name!", nameof(name));
+            }
+        }
+
+        protected virtual string GetContentType(string extension)
+        {
+            extension = extension.RemovePreFix(".").ToLowerInvariant();
+
+            switch (extension)
+            {
+                case "png":
+                    return "image/png";
+                case "gif":
+                    return "image/gif";
+                case "jpg":
+                case "jpeg":
+                    return "image/jpeg";
+                case "bmp":
+                    return "image/bmp";
+                case "webp":
+                    return "image/webp";
+
+                //TODO: Add other extensions too..
+
+                default:
+                    return "application/octet-stream";
+            }
+        }
+
+        protected virtual string GetExtension(SKEncodedImageFormat imageFormat)
+        {
+            return imageFormat == SKEncodedImageFormat.Jpeg
+                ? ".jpg"
+                : "." + imageFormat.ToString().ToLowerInvariant();
+        }
+
+        public virtual async Task<FileUploadOutputDto> CreateAsync(FileUploadInputDto input)
+        {
+            if (!await AuthorizationService.IsGrantedAnyAsync(BloggingPermissions.Posts.Create, BloggingPermissions.Posts.Update))
+            {
+                throw new AbpAuthorizationException();
             }
 
-            if (input.Bytes.Length > BloggingWebConsts.FileUploading.MaxFileSize)
+            if (input.File == null)
+            {
+                ThrowValidationException("Bytes of file can not be null or empty!", nameof(input.File));
+            }
+
+            if (input.File.ContentLength > BloggingWebConsts.FileUploading.MaxFileSize)
             {
                 throw new UserFriendlyException($"File exceeds the maximum upload size ({BloggingWebConsts.FileUploading.MaxFileSizeAsMegabytes} MB)!");
             }
 
-            if (!ImageFormatHelper.IsValidImage(input.Bytes, FileUploadConsts.AllowedImageUploadFormats))
+            var position = input.File.GetStream().Position;
+
+            var imageFormat = ImageFormatHelper.GetValidImageFormat(input.File.GetStream(), FileUploadConsts.AllowedImageUploadFormats);
+            if (imageFormat == null)
             {
-                throw new UserFriendlyException("Not a valid image format!");
+                throw new UserFriendlyException("Invalid image format!");
             }
 
-            var uniqueFileName = GenerateUniqueFileName(Path.GetExtension(input.Name));
-            var filePath = Path.Combine(Options.FileUploadLocalFolder, uniqueFileName);
-
-            if (!Directory.Exists(Options.FileUploadLocalFolder))
+            // GetValidImageFormat may change the position of the stream
+            if (input.File.GetStream().CanSeek)
             {
-                Directory.CreateDirectory(Options.FileUploadLocalFolder);
+                input.File.GetStream().Position = position;
             }
-            
-            File.WriteAllBytes(filePath, input.Bytes); //TODO: Previously was using WriteAllBytesAsync, but it's only in .netcore.
 
-            return Task.FromResult(new FileUploadOutputDto
+            var uniqueFileName = GenerateUniqueFileName(GetExtension(imageFormat.Value));
+            ValidateFileName(uniqueFileName);
+
+            await BlobContainer.SaveAsync(uniqueFileName, input.File.GetStream());
+
+            return new FileUploadOutputDto
             {
                 Name = uniqueFileName,
                 WebUrl = "/api/blogging/files/www/" + uniqueFileName
-            });
+            };
         }
 
         private static void ThrowValidationException(string message, string memberName)

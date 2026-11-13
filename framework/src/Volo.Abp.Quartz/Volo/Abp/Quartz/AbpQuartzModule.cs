@@ -1,45 +1,92 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Quartz.Impl;
-using Quartz.Spi;
 using Volo.Abp.Modularity;
 using Volo.Abp.Threading;
 
-namespace Volo.Abp.Quartz
+namespace Volo.Abp.Quartz;
+
+public class AbpQuartzModule : AbpModule
 {
-    public class AbpQuartzModule : AbpModule
+    private IScheduler _scheduler = default!;
+
+    public override void ConfigureServices(ServiceConfigurationContext context)
     {
-        private IScheduler _scheduler;
+        var options = context.Services.ExecutePreConfiguredActions<AbpQuartzOptions>();
 
-        public override void ConfigureServices(ServiceConfigurationContext context)
+        context.Services.AddQuartz(options.Properties, build =>
         {
-            var options = context.Services.ExecutePreConfiguredActions<AbpQuartzPreOptions>();
-            context.Services.AddSingleton(AsyncHelper.RunSync(() => new StdSchedulerFactory(options.Properties).GetScheduler()));
-            context.Services.AddSingleton(typeof(IJobFactory), typeof(AbpQuartzJobFactory));
-        }
-
-        public override void OnApplicationInitialization(ApplicationInitializationContext context)
-        {
-            var options = context.ServiceProvider.GetRequiredService<IOptions<AbpQuartzPreOptions>>().Value;
-            
-            _scheduler = context.ServiceProvider.GetService<IScheduler>();
-            _scheduler.JobFactory = context.ServiceProvider.GetService<IJobFactory>();
-            
-            if (options.StartDelay.Ticks > 0)
+            // these are the defaults
+            if (options.Properties[StdSchedulerFactory.PropertySchedulerJobFactoryType] == null)
             {
-                AsyncHelper.RunSync(() => _scheduler.StartDelayed(options.StartDelay));
+                //MicrosoftDependencyInjectionJobFactory is the default for DI configuration, this method will be removed later on
+                //build.UseMicrosoftDependencyInjectionScopedJobFactory();
             }
-            else
-            {
-                AsyncHelper.RunSync(() => _scheduler.Start());
-            }
-        }
 
-        public override void OnApplicationShutdown(ApplicationShutdownContext context)
+            if (options.Properties[StdSchedulerFactory.PropertySchedulerTypeLoadHelperType] == null)
+            {
+                build.UseSimpleTypeLoader();
+            }
+
+            if (options.Properties[StdSchedulerFactory.PropertyJobStoreType] == null)
+            {
+                build.UseInMemoryStore();
+            }
+
+            if (options.Properties[StdSchedulerFactory.PropertyThreadPoolType] == null)
+            {
+                build.UseDefaultThreadPool(tp =>
+                {
+                    tp.MaxConcurrency = 10;
+                });
+            }
+
+            if (options.Properties["quartz.plugin.timeZoneConverter.type"] == null)
+            {
+                build.UseTimeZoneConverter();
+            }
+
+            options.Configurator?.Invoke(build);
+        });
+
+        context.Services.AddSingleton(serviceProvider =>
         {
-            //TODO: ABP may provide two methods for application shutdown: OnPreApplicationShutdown & OnApplicationShutdown
-            AsyncHelper.RunSync(() => _scheduler.Shutdown());
+            return AsyncHelper.RunSync(() => serviceProvider.GetRequiredService<ISchedulerFactory>().GetScheduler());
+        });
+
+        Configure<AbpQuartzOptions>(quartzOptions =>
+        {
+            quartzOptions.Properties = options.Properties;
+            quartzOptions.StartDelay = options.StartDelay;
+        });
+    }
+
+    public async override Task OnApplicationInitializationAsync(ApplicationInitializationContext context)
+    {
+        var options = context.ServiceProvider.GetRequiredService<IOptions<AbpQuartzOptions>>().Value;
+
+        _scheduler = context.ServiceProvider.GetRequiredService<IScheduler>();
+
+        await options.StartSchedulerFactory.Invoke(_scheduler);
+    }
+
+    public async override Task OnApplicationShutdownAsync(ApplicationShutdownContext context)
+    {
+        if (!_scheduler.IsShutdown)
+        {
+            await _scheduler.Shutdown();
         }
+    }
+
+    public override void OnApplicationInitialization(ApplicationInitializationContext context)
+    {
+        AsyncHelper.RunSync(() => OnApplicationInitializationAsync(context));
+    }
+
+    public override void OnApplicationShutdown(ApplicationShutdownContext context)
+    {
+        AsyncHelper.RunSync(() => OnApplicationShutdownAsync(context));
     }
 }

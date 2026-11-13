@@ -9,6 +9,7 @@ using Volo.Abp.MongoDB;
 using Volo.Docs.MongoDB;
 using System.Linq;
 using System.Linq.Dynamic.Core;
+using System.Threading;
 
 namespace Volo.Docs.Projects
 {
@@ -19,20 +20,35 @@ namespace Volo.Docs.Projects
         {
         }
 
-        public async Task<List<Project>> GetListAsync(string sorting, int maxResultCount, int skipCount)
+        public virtual async Task<List<Project>> GetListAsync(
+            string sorting, 
+            int maxResultCount, 
+            int skipCount,
+            bool includeDetails = false,
+            CancellationToken cancellationToken = default)
         {
-            var projects = await GetMongoQueryable().OrderBy(sorting ?? "Id desc").As<IMongoQueryable<Project>>()
-                .PageBy<Project, IMongoQueryable<Project>>(skipCount, maxResultCount)
-                .ToListAsync();
+            var projects = await (await GetQueryableAsync(cancellationToken)).OrderBy(sorting.IsNullOrEmpty() ? "Id desc" : sorting).PageBy(skipCount, maxResultCount)
+                .ToListAsync(GetCancellationToken(cancellationToken));
 
             return projects;
         }
 
-        public async Task<Project> GetByShortNameAsync(string shortName)
+        public virtual async Task<List<ProjectWithoutDetails>> GetListWithoutDetailsAsync(CancellationToken cancellationToken = default)
+        {
+            return await (await GetQueryableAsync(cancellationToken))
+                .Select(x=> new ProjectWithoutDetails {
+                    Id = x.Id,
+                    Name = x.Name,
+                })
+                .OrderBy(x=>x.Name)
+                .ToListAsync(GetCancellationToken(cancellationToken));
+        }
+
+        public virtual async Task<Project> GetByShortNameAsync(string shortName, CancellationToken cancellationToken = default)
         {
             var normalizeShortName = NormalizeShortName(shortName);
-            
-            var project = await GetMongoQueryable().FirstOrDefaultAsync(p => p.ShortName == normalizeShortName);
+
+            var project = await (await GetQueryableAsync(cancellationToken)).FirstOrDefaultAsync(p => p.ShortName == normalizeShortName, GetCancellationToken(cancellationToken));
 
             if (project == null)
             {
@@ -42,13 +58,13 @@ namespace Volo.Docs.Projects
             return project;
         }
 
-        public async Task<bool> ShortNameExistsAsync(string shortName)
+        public virtual async Task<bool> ShortNameExistsAsync(string shortName, CancellationToken cancellationToken = default)
         {
             var normalizeShortName = NormalizeShortName(shortName);
-            
-            return await GetMongoQueryable().AnyAsync(x => x.ShortName == normalizeShortName);
+
+            return await (await GetQueryableAsync(cancellationToken)).AnyAsync(x => x.ShortName == normalizeShortName, GetCancellationToken(cancellationToken));
         }
-        
+
         private string NormalizeShortName(string shortName)
         {
             return shortName.ToLower();

@@ -13,7 +13,6 @@ import fse from 'fs-extra';
   });
 
   await fse.remove('../../../templates/app/angular/node_modules/@abp');
-
   await fse.copy('../node_modules/@abp', '../../../templates/app/angular/node_modules/@abp', {
     overwrite: true,
   });

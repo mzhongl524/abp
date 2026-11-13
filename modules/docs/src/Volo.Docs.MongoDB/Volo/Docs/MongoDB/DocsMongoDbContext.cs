@@ -2,11 +2,13 @@
 using Volo.Abp.Data;
 using Volo.Docs.Projects;
 using Volo.Abp.MongoDB;
+using Volo.Abp.MultiTenancy;
 using Volo.Docs.Documents;
 
 namespace Volo.Docs.MongoDB
 {
-    [ConnectionStringName(DocsDbProperties.ConnectionStringName)]
+    [IgnoreMultiTenancy]
+    [ConnectionStringName(AbpDocsDbProperties.ConnectionStringName)]
     public class DocsMongoDbContext : AbpMongoDbContext, IDocsMongoDbContext
     {
         public IMongoCollection<Project> Projects => Collection<Project>();

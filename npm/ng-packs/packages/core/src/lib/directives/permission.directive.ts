@@ -1,68 +1,77 @@
 import {
+  AfterViewInit,
+  ChangeDetectorRef,
   Directive,
-  ElementRef,
-  Input,
-  OnDestroy,
-  OnInit,
-  Renderer2,
-  ViewContainerRef,
-  TemplateRef,
-  Optional,
-  SimpleChanges,
   OnChanges,
+  OnDestroy,
+  TemplateRef,
+  ViewContainerRef,
+  inject,
+  input
 } from '@angular/core';
-import { Store } from '@ngxs/store';
-import { ConfigState } from '../states';
-import { takeUntilDestroy } from '../utils';
-import { Subscription } from 'rxjs';
+import { ReplaySubject, Subscription } from 'rxjs';
+import { distinctUntilChanged, take } from 'rxjs/operators';
+import { PermissionService } from '../services/permission.service';
+import { QUEUE_MANAGER } from '../tokens/queue.token';
+import { QueueManager } from '../utils/queue';
 
 @Directive({
   selector: '[abpPermission]',
 })
-export class PermissionDirective implements OnInit, OnDestroy, OnChanges {
-  @Input('abpPermission') condition: string;
+export class PermissionDirective implements OnDestroy, OnChanges, AfterViewInit {
+  private templateRef = inject<TemplateRef<any>>(TemplateRef, { optional: true });
+  private vcRef = inject(ViewContainerRef);
+  private permissionService = inject(PermissionService);
+  private cdRef = inject(ChangeDetectorRef);
+  queue = inject<QueueManager>(QUEUE_MANAGER);
 
-  subscription: Subscription;
+  readonly condition = input<string | undefined>(undefined, { alias: "abpPermission" });
 
-  constructor(
-    private elRef: ElementRef,
-    private renderer: Renderer2,
-    private store: Store,
-    @Optional() private templateRef: TemplateRef<any>,
-    private vcRef: ViewContainerRef,
-  ) {}
+  readonly runChangeDetection = input(true, { alias: "abpPermissionRunChangeDetection" });
+
+  subscription!: Subscription;
+
+  cdrSubject = new ReplaySubject<void>();
+
+  rendered = false;
 
   private check() {
     if (this.subscription) {
       this.subscription.unsubscribe();
     }
 
-    this.subscription = this.store
-      .select(ConfigState.getGrantedPolicy(this.condition))
-      .pipe(takeUntilDestroy(this))
+    this.subscription = this.permissionService
+      .getGrantedPolicy$(this.condition() || '')
+      .pipe(distinctUntilChanged())
       .subscribe(isGranted => {
-        if (this.templateRef && isGranted) {
-          this.vcRef.clear();
+        this.vcRef.clear();
+        if (isGranted && this.templateRef) {
           this.vcRef.createEmbeddedView(this.templateRef);
-        } else if (this.templateRef && !isGranted) {
-          this.vcRef.clear();
-        } else if (!isGranted && !this.templateRef) {
-          this.renderer.removeChild((this.elRef.nativeElement as HTMLElement).parentElement, this.elRef.nativeElement);
+        }
+        if (this.runChangeDetection()) {
+          if (!this.rendered) {
+            this.cdrSubject.next();
+          } else {
+            // Defer via queue — sync detectChanges during ApplicationRef.tick
+            // (e.g. post-login permission/config refresh) can contribute to NG0101.
+            this.queue.add(() => this.cdRef.detectChanges());
+          }
+        } else {
+          this.cdRef.markForCheck();
         }
       });
   }
 
-  ngOnInit() {
-    if (this.templateRef && !this.condition) {
-      this.vcRef.createEmbeddedView(this.templateRef);
-    }
+  ngOnDestroy(): void {
+    if (this.subscription) this.subscription.unsubscribe();
   }
 
-  ngOnDestroy(): void {}
+  ngOnChanges() {
+    this.check();
+  }
 
-  ngOnChanges({ condition }: SimpleChanges) {
-    if ((condition || { currentValue: null }).currentValue) {
-      this.check();
-    }
+  ngAfterViewInit() {
+    this.cdrSubject.pipe(take(1)).subscribe(() => this.queue.add(() => this.cdRef.detectChanges()));
+    this.rendered = true;
   }
 }

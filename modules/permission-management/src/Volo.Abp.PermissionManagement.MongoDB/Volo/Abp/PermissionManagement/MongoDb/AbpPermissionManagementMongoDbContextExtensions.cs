@@ -1,26 +1,32 @@
-﻿using System;
-using Volo.Abp.MongoDB;
+﻿using Volo.Abp.MongoDB;
 
-namespace Volo.Abp.PermissionManagement.MongoDB
+namespace Volo.Abp.PermissionManagement.MongoDB;
+
+public static class AbpPermissionManagementMongoDbContextExtensions
 {
-    public static class AbpPermissionManagementMongoDbContextExtensions
+    public static void ConfigurePermissionManagement(
+        this IMongoModelBuilder builder)
     {
-        public static void ConfigurePermissionManagement(
-            this IMongoModelBuilder builder,
-            Action<AbpMongoModelBuilderConfigurationOptions> optionsAction = null)
+        Check.NotNull(builder, nameof(builder));
+
+        builder.Entity<PermissionGroupDefinitionRecord>(b =>
         {
-            Check.NotNull(builder, nameof(builder));
+            b.CollectionName = AbpPermissionManagementDbProperties.DbTablePrefix + "PermissionGroups";
+        });
 
-            var options = new PermissionManagementMongoModelBuilderConfigurationOptions(
-                AbpPermissionManagementDbProperties.DbTablePrefix
-            );
+        builder.Entity<PermissionDefinitionRecord>(b =>
+        {
+            b.CollectionName = AbpPermissionManagementDbProperties.DbTablePrefix + "Permissions";
+        });
 
-            optionsAction?.Invoke(options);
+        builder.Entity<PermissionGrant>(b =>
+        {
+            b.CollectionName = AbpPermissionManagementDbProperties.DbTablePrefix + "PermissionGrants";
+        });
 
-            builder.Entity<PermissionGrant>(b =>
-            {
-                b.CollectionName = options.CollectionPrefix + "PermissionGrants";
-            });
-        }
+        builder.Entity<ResourcePermissionGrant>(b =>
+        {
+            b.CollectionName = AbpPermissionManagementDbProperties.DbTablePrefix + "ResourcePermissionGrants";
+        });
     }
 }

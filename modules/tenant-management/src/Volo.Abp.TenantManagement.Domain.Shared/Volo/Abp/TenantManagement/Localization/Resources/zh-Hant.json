@@ -1,6 +1,7 @@
 {
   "culture": "zh-Hant",
   "texts": {
+    "Volo.Abp.TenantManagement:DuplicateTenantName": "租戶名稱已存在: {Name}",
     "Menu:TenantManagement": "租戶管理",
     "Tenants": "租戶",
     "NewTenant": "新租戶",
@@ -15,8 +16,9 @@
     "Permission:Edit": "編輯",
     "Permission:Delete": "刪除",
     "Permission:ManageConnectionStrings": "管理資料庫連線字串",
-    "Permission:ManageFeatures": "管理功能",
-    "DisplayName:AdminEmailAddress": "管理者信箱", 
+    "Permission:ManageFeatures": "功能",
+    "DisplayName:AdminEmailAddress": "管理者信箱",
     "DisplayName:AdminPassword": "管理者密碼"
   }
 }
+

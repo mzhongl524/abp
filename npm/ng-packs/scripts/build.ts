@@ -1,5 +1,6 @@
-import execa from 'execa';
 import program from 'commander';
+import execa from 'execa';
+import fse from 'fs-extra';
 
 (async () => {
   program.option('-i, --noInstall', 'skip updating package.json and installation', false);
@@ -8,19 +9,24 @@ import program from 'commander';
 
   try {
     if (!program.noInstall) {
-      await execa('yarn', ['install-new-dependencies'], { stdout: 'inherit' });
+      await execa('yarn', ['install'], { stdout: 'inherit', cwd: '../' });
     }
 
+    await fse.remove('../dist');
+
     await execa(
       'yarn',
       [
-        'symlink',
-        'copy',
-        '--angular',
-        '--no-watch',
-        '--sync',
-        '--packages',
-        '@abp/ng.core,@abp/ng.theme.shared',
+        'nx',
+        'run-many',
+        '--target',
+        'build',
+        '--prod',
+        '--projects',
+        'core,theme-shared,components',
+        '--parallel',
+        '1',
+        '--skip-nx-cache',
       ],
       { stdout: 'inherit', cwd: '../' },
     );
@@ -28,13 +34,16 @@ import program from 'commander';
     await execa(
       'yarn',
       [
-        'symlink',
-        'copy',
-        '--angular',
-        '--no-watch',
-        '--all-packages',
-        '--excluded-packages',
-        '@abp/ng.core,@abp/ng.theme.shared,@abp/ng.feature-management,@abp/ng.permission-management,@abp/ng.account.config,@abp/ng.identity.config,@abp/ng.setting-management.config,@abp/ng.tenant-management.config',
+        'nx',
+        'run-many',
+        '--target',
+        'build',
+        '--prod',
+        '--projects',
+        'feature-management,permission-management,account-core',
+        '--parallel',
+        '1',
+        '--skip-nx-cache',
       ],
       { stdout: 'inherit', cwd: '../' },
     );
@@ -42,12 +51,17 @@ import program from 'commander';
     await execa(
       'yarn',
       [
-        'symlink',
-        'copy',
-        '--angular',
-        '--no-watch',
-        '--packages',
-        '@abp/ng.feature-management,@abp/ng.permission-management,@abp/ng.account.config,@abp/ng.identity.config,@abp/ng.setting-management.config,@abp/ng.tenant-management.config',
+        'nx',
+        'run-many',
+        '--target',
+        'build',
+        '--prod',
+        '--all',
+        '--exclude',
+        'dev-app,schematics,core,theme-shared,components,feature-management,permission-management,account-core',
+        '--parallel',
+        '1',
+        '--skip-nx-cache',
       ],
       { stdout: 'inherit', cwd: '../' },
     );

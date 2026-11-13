@@ -8,19 +8,14 @@ Run `yarn` to install all dependencies, then run `yarn prepare:workspace` to pr
 
 Run `yarn start` to start the `dev-app`. Navigate to http://localhost:4200/.
 
-## Package
-
-[Symlink Manager](https://github.com/mehmet-erim/symlink-manager) is used to manage symbolic link processes. Run `yarn symlink copy` to select the packages to develop.
 
 ## Application
 
 The `dev-app` project is the same as the Angular UI template project. `dev-app` is used to see changes instantly.
 
-If you will only develop the `dev-app`, you don't need to run `symlink-manager`.
-
 > Reminder! If you have developed the `dev-app` template, you should do the same for the application and module templates.
 
-For more information, see the [docs.abp.io](https://docs.abp.io)
+For more information, see the [abp.io/docs](https://abp.io/docs/latest/)
 
 # Committing changes
 
@@ -87,16 +82,11 @@ The following is the list of supported scopes:
 - **core**
 - **theme-shared**
 - **theme-basic**
-- **account**
 - **identity**
 - **tenant-management**
 - **feature-management**
 - **permission-management**
 - **setting-management**
-- **account-config**
-- **identity-config**
-- **setting-management-config**
-- **tenant-management-config**
 
 There are currently a few exceptions to the "use package name" rule:
 

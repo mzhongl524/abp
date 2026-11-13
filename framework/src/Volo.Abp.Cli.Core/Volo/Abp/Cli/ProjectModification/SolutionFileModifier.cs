@@ -4,114 +4,80 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Xml;
+using Volo.Abp.Cli.Utils;
 using Volo.Abp.DependencyInjection;
 
-namespace Volo.Abp.Cli.ProjectModification
+namespace Volo.Abp.Cli.ProjectModification;
+
+public class SolutionFileModifier : ITransientDependency
 {
-    public class SolutionFileModifier : ITransientDependency
+    private readonly ICmdHelper _cmdHelper;
+
+    public SolutionFileModifier(ICmdHelper cmdHelper)
     {
-        public async Task AddModuleToSolutionFileAsync(ModuleWithMastersInfo module, string solutionFile)
+        _cmdHelper = cmdHelper;
+    }
+
+    public async Task RemoveProjectFromSolutionFileAsync(string solutionFile, string projectName)
+    {
+        var workingDirectory = Path.GetDirectoryName(solutionFile);
+        var list = _cmdHelper.RunCmdAndGetOutput($"dotnet sln \"{solutionFile}\" list", workingDirectory: workingDirectory);
+
+        foreach (var line in list.Split(new[] { Environment.NewLine, "\n" }, StringSplitOptions.None))
         {
-            await AddModule(module, solutionFile);
-        }
-
-        private async Task AddModule(ModuleWithMastersInfo module, string solutionFile)
-        {
-            var srcModuleFolderId = await AddNewFolderAndGetIdOrGetExistingId(solutionFile, module.Name, await AddNewFolderAndGetIdOrGetExistingId(solutionFile, "modules"));
-            var testModuleFolderId = await AddNewFolderAndGetIdOrGetExistingId(solutionFile, module.Name + ".Tests", await AddNewFolderAndGetIdOrGetExistingId(solutionFile, "test"));
-            
-            var file = File.ReadAllText(solutionFile);
-            var lines = file.Split(Environment.NewLine).ToList();
-
-
-            var projectsUnderModule = Directory.GetFiles(
-                Path.Combine(Path.GetDirectoryName(solutionFile), "modules", module.Name),
-                "*.csproj",
-                SearchOption.AllDirectories);
-
-            var projectsUnderTest = Directory.GetFiles(
-                Path.Combine(Path.GetDirectoryName(solutionFile), "modules", module.Name, "test"),
-                "*.csproj",
-                SearchOption.AllDirectories);
-
-            foreach (var projectPath in projectsUnderModule)
+            if (Path.GetFileNameWithoutExtension(line.Trim()).Equals(projectName, StringComparison.InvariantCultureIgnoreCase))
             {
-                var parentFolderId = projectsUnderTest.Contains(projectPath) ? testModuleFolderId : srcModuleFolderId;
-                var projectId = Path.GetFileName(projectPath).Replace(".csproj","");
-                var projectParentFolderInModule = projectsUnderTest.Contains(projectPath) ? "test" : "src";
-
-                if (lines.Any(l => l.Contains($"\"{projectId}\"")))
-                {
-                    continue;
-                }
-
-                var projectGuid = Guid.NewGuid().ToString();
-
-                var newProjectLine = "Project(\"{9A19103F-16F7-4668-BE54-9A1E7A4F7556}\") = \"" + projectId + "\"," +
-                              " \"modules\\" + module.Name + "\\"+ projectParentFolderInModule + "\\" + projectId + "\\" + projectId + ".csproj\", \"{" + projectGuid + "}\""
-                              + Environment.NewLine + "EndProject";
-
-                lines.InsertAfter(l => l.Trim().Equals("EndProject"), newProjectLine);
-                
-                var newPostSolutionLine =
-                    "		{" + projectGuid + "}.Debug|Any CPU.ActiveCfg = Debug|Any CPU" + Environment.NewLine +
-                    "		{" + projectGuid + "}.Debug|Any CPU.Build.0 = Debug|Any CPU" + Environment.NewLine +
-                    "		{" + projectGuid + "}.Release|Any CPU.ActiveCfg = Release|Any CPU" + Environment.NewLine +
-                    "		{" + projectGuid + "}.Release|Any CPU.Build.0 = Release|Any CPU";
-
-                lines.InsertAfter(l=>l.Contains("GlobalSection") && l.Contains("ProjectConfigurationPlatforms"), newPostSolutionLine);
-                
-                var newPreSolutionLine =
-                    "		{"+ projectGuid + "} = {"+ parentFolderId + "}";
-
-                lines.InsertAfter(l=>l.Contains("GlobalSection") && l.Contains("NestedProjects"), newPreSolutionLine);
-            }
-
-            File.WriteAllText(solutionFile, string.Join(Environment.NewLine, lines));
-
-            if (module.MasterModuleInfos != null)
-            {
-                foreach (var masterModule in module.MasterModuleInfos)
-                {
-                    await AddModule(masterModule, solutionFile);
-                }
+                _cmdHelper.RunCmd($"dotnet sln \"{solutionFile}\" remove \"{line.Trim()}\"", workingDirectory: workingDirectory);
+                break;
             }
         }
+    }
 
-        private async Task<string> AddNewFolderAndGetIdOrGetExistingId(string solutionFile, string folderName, string parentFolderId = null)
+    public async Task AddModuleToSolutionFileAsync(ModuleWithMastersInfo module, string solutionFile)
+    {
+        await AddModuleAsync(module, solutionFile);
+    }
+
+    public async Task AddPackageToSolutionFileAsync(NugetPackageInfo package, string solutionFile)
+    {
+        await AddPackageAsync(package, solutionFile);
+    }
+
+    private async Task AddPackageAsync(NugetPackageInfo package, string solutionFile)
+    {
+        _cmdHelper.RunCmd($"dotnet sln \"{solutionFile}\" add \"packages\\{package.Name}\\{package.Name}.csproj\" --solution-folder src");
+    }
+
+    private async Task AddModuleAsync(ModuleWithMastersInfo module, string solutionFile)
+    {
+        var slnDir = Path.GetDirectoryName(solutionFile);
+        var projectsUnderModule = Directory.GetFiles(
+            Path.Combine(slnDir, "modules", module.Name),
+            "*.csproj",
+            SearchOption.AllDirectories);
+
+        var projectsUnderTest = new List<string>();
+        if (Directory.Exists(Path.Combine(slnDir, "modules", module.Name, "test")))
         {
-            var file = File.ReadAllText(solutionFile);
-            var lines = file.Split(Environment.NewLine).ToList();
-            string folderId;
+            projectsUnderTest = Directory.GetFiles(
+                Path.Combine(slnDir, "modules", module.Name, "test"),
+                "*.csproj",
+                SearchOption.AllDirectories).ToList();
+        }
 
-            var folderLineIndex = lines.FindIndex(l =>
-                l.Contains("2150E333-8FDC-42A3-9474-1A3956D46DE8") && l.Contains("\""+ folderName + "\""));
+        foreach (var projectPath in projectsUnderModule)
+        {
+            var solutionFolder = projectsUnderTest.Contains(projectPath) ? Path.Combine("test", module.Name) : Path.Combine("modules", module.Name);
+            _cmdHelper.RunCmd($"dotnet sln \"{solutionFile}\" add \"{projectPath}\" --solution-folder \"{solutionFolder}\"", workingDirectory: slnDir);
+        }
 
-            if (folderLineIndex < 0)
+        if (module.MasterModuleInfos != null)
+        {
+            foreach (var masterModule in module.MasterModuleInfos)
             {
-                folderId = Guid.NewGuid().ToString();
-                var newFolderLine = "Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \""+ folderName + "\", \""+ folderName + "\", \"{" + folderId + "}\""
-                                    + Environment.NewLine + "EndProject";
-
-                lines.InsertAfter(l => l.Trim().Equals("EndProject"), newFolderLine);
-
-                if (parentFolderId != null)
-                {
-                    var newPreSolutionLine =
-                        "		{" + folderId + "} = {" + parentFolderId + "}";
-
-                    lines.InsertAfter(l => l.Contains("GlobalSection") && l.Contains("NestedProjects"), newPreSolutionLine);
-                }
+                await AddModuleAsync(masterModule, solutionFile);
             }
-            else
-            {
-                folderId = lines[folderLineIndex].Replace("\"", " ").Replace("{", " ").Replace("}", " ").TrimEnd()
-                    .Split(" ").Last();
-            }
-
-            File.WriteAllText(solutionFile, string.Join(Environment.NewLine, lines));
-
-            return folderId;
         }
     }
 }

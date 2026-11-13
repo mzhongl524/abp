@@ -1,7 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Volo.Abp.AspNetCore.Mvc.Localization;
 using Volo.Abp.AspNetCore.Mvc.UI.Bootstrap;
-using Volo.Abp.AutoMapper;
+using Volo.Abp.Mapperly;
+using Volo.Abp.Http.ProxyScripting.Generators.JQuery;
 using Volo.Abp.Modularity;
 using Volo.Abp.UI.Navigation;
 using Volo.Abp.VirtualFileSystem;
@@ -11,7 +12,7 @@ using Volo.Docs.Localization;
 namespace Volo.Docs.Admin
 {
     [DependsOn(
-        typeof(DocsAdminHttpApiModule),
+        typeof(DocsAdminApplicationContractsModule),
         typeof(AbpAspNetCoreMvcUiBootstrapModule)
         )]
     public class DocsAdminWebModule : AbpModule
@@ -20,7 +21,11 @@ namespace Volo.Docs.Admin
         {
             PreConfigure<AbpMvcDataAnnotationsLocalizationOptions>(options =>
             {
-                options.AddAssemblyResource(typeof(DocsResource), typeof(DocsAdminWebModule).Assembly);
+                options.AddAssemblyResource(
+                    typeof(DocsResource), 
+                    typeof(DocsAdminWebModule).Assembly, 
+                    typeof(DocsAdminApplicationContractsModule).Assembly
+                );
             });
 
             PreConfigure<IMvcBuilder>(mvcBuilder =>
@@ -31,7 +36,8 @@ namespace Volo.Docs.Admin
 
         public override void ConfigureServices(ServiceConfigurationContext context)
         {
-
+            context.Services.AddMapperlyObjectMapper<DocsAdminWebModule>();
+            
             Configure<AbpNavigationOptions>(options =>
             {
                 options.MenuContributors.Add(new DocsMenuContributor());
@@ -39,13 +45,12 @@ namespace Volo.Docs.Admin
 
             Configure<AbpVirtualFileSystemOptions>(options =>
             {
-                options.FileSets.AddEmbedded<DocsAdminWebModule>("Volo.Docs.Admin");
+                options.FileSets.AddEmbedded<DocsAdminWebModule>();
             });
 
-            context.Services.AddAutoMapperObjectMapper<DocsAdminWebModule>();
-            Configure<AbpAutoMapperOptions>(options =>
+            Configure<DynamicJavaScriptProxyOptions>(options =>
             {
-                options.AddProfile<DocsAdminWebAutoMapperProfile>(validate: true);
+                options.DisableModule(DocsAdminRemoteServiceConsts.ModuleName);
             });
         }
     }

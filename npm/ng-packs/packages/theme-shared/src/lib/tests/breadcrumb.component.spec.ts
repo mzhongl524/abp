@@ -1,64 +1,143 @@
-import { LocalizationPipe } from '@abp/ng.core';
-import { Directive } from '@angular/core';
-import { Router } from '@angular/router';
-import { createComponentFactory, Spectator, SpyObject } from '@ngneat/spectator/jest';
-import { Store } from '@ngxs/store';
-import { BreadcrumbComponent } from '../components/breadcrumb/breadcrumb.component';
+import {
+  ABP,
+  LocalizationPipe,
+  RouterOutletComponent,
+  RoutesService,
+  provideAbpCore,
+  withOptions,
+  RestService,
+  AbpApplicationConfigurationService,
+  ConfigStateService,
+} from '@abp/ng.core';
+import { RouterModule } from '@angular/router';
+import { By } from '@angular/platform-browser';
+import { createRoutingFactory, SpectatorRouting } from '@ngneat/spectator/vitest';
+import { of } from 'rxjs';
+import { BreadcrumbComponent, BreadcrumbItemsComponent } from '../components';
+import { setupComponentResources } from './utils';
 
-@Directive({
-  // tslint:disable-next-line: directive-selector
-  selector: '[routerLink], [routerLinkActive]',
-})
-class DummyRouterLinkDirective {}
+const mockRoutes: ABP.Route[] = [
+  { name: '_::Identity', path: '/identity' },
+  { name: '_::Users', path: '/identity/users', parentName: '_::Identity' },
+];
 
 describe('BreadcrumbComponent', () => {
-  let spectator: Spectator<BreadcrumbComponent>;
-  let store: SpyObject<Store>;
-  const createComponent = createComponentFactory({
-    component: BreadcrumbComponent,
-    mocks: [Store, Router],
-    imports: [],
-    declarations: [LocalizationPipe, DummyRouterLinkDirective],
+  let spectator: SpectatorRouting<RouterOutletComponent>;
+  let routes: RoutesService;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  const createRouting = createRoutingFactory({
+    component: RouterOutletComponent,
+    stubsEnabled: false,
     detectChanges: false,
+    imports: [
+      RouterModule,
+      LocalizationPipe,
+      BreadcrumbComponent,
+      BreadcrumbItemsComponent,
+    ],
+    providers: [
+      provideAbpCore(
+        withOptions({
+          environment: {
+            apis: {
+              default: {
+                url: 'http://localhost:4200',
+              },
+            },
+            application: {
+              name: 'TestApp',
+              baseUrl: 'http://localhost:4200',
+            },
+          },
+          registerLocaleFn: () => Promise.resolve(),
+          skipGetAppConfiguration: true,
+          skipInitAuthService: true,
+        }),
+      ),
+      {
+        provide: RestService,
+        useValue: {
+          request: vi.fn(),
+          handleError: vi.fn(),
+        },
+      },
+      {
+        provide: AbpApplicationConfigurationService,
+        useValue: {
+          get: vi.fn(),
+        },
+      },
+      {
+        provide: ConfigStateService,
+        useValue: {
+          getOne: vi.fn(),
+          getAll: vi.fn(() => ({})),
+          getAll$: vi.fn(() => of({})),
+          getDeep: vi.fn(),
+          getDeep$: vi.fn(() => of(undefined)),
+          createOnUpdateStream: vi.fn(() => ({ 
+            subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) 
+          })),
+          refreshAppState: vi.fn(),
+        },
+      },
+    ],
+    routes: [
+      {
+        path: '',
+        children: [
+          {
+            path: 'identity',
+            children: [
+              {
+                path: 'users',
+                component: BreadcrumbComponent,
+              },
+            ],
+          },
+        ],
+      },
+    ],
   });
+
+  beforeAll(() => setupComponentResources('../components/breadcrumb', import.meta.url));
 
   beforeEach(() => {
-    spectator = createComponent();
-    store = spectator.get(Store);
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    spectator = createRouting();
+    routes = spectator.inject(RoutesService);
   });
 
-  it('should display the breadcrumb', () => {
-    const router = spectator.get(Router);
-    (router as any).url = '/identity/users';
-    store.selectSnapshot.mockReturnValueOnce({ LeptonLayoutState: {} });
-    store.selectSnapshot.mockReturnValueOnce({
-      name: 'Identity',
-      children: [{ name: 'Users', path: 'users' }],
-    });
-    // for abpLocalization
-    store.selectSnapshot.mockReturnValueOnce('Identity');
-    store.selectSnapshot.mockReturnValueOnce('Users');
-    spectator.detectChanges();
-
-    expect(spectator.component.segments).toEqual(['Identity', 'Users']);
-    const elements = spectator.queryAll('li');
-    expect(elements).toHaveLength(3);
-    expect(elements[1]).toHaveText('Identity');
-    expect(elements[2]).toHaveText('Users');
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
   });
 
-  it('should not display the breadcrumb', () => {
-    const router = spectator.get(Router);
-    (router as any).url = '/identity/users';
+  it('should create component', async () => {
+    routes.add(mockRoutes);
+    await spectator.router.navigateByUrl('/identity/users');
     spectator.detectChanges();
-    expect(spectator.query('ol.breadcrumb')).toBeFalsy();
+    expect(spectator.component).toBeTruthy();
   });
 
-  it('should not display the breadcrumb when abp route not found', () => {
-    const router = spectator.get(Router);
-    (router as any).url = '/identity/users';
-    store.selectSnapshot.mockReturnValueOnce({ LeptonLayoutState: {} });
+  it('should handle empty routes', async () => {
+    routes.add([]);
+    await spectator.router.navigateByUrl('/identity/users');
     spectator.detectChanges();
-    expect(spectator.query('ol.breadcrumb')).toBeFalsy();
+    expect(spectator.component).toBeTruthy();
+  });
+
+  it('should keep the path on segments so breadcrumbs render as links', async () => {
+    routes.add(mockRoutes);
+    await spectator.router.navigateByUrl('/identity/users');
+    spectator.detectChanges();
+
+    const breadcrumb = spectator.fixture.debugElement.query(By.directive(BreadcrumbComponent))
+      .componentInstance as BreadcrumbComponent;
+
+    expect(breadcrumb.segments().map(segment => segment.path)).toEqual([
+      '/identity',
+      '/identity/users',
+    ]);
   });
 });

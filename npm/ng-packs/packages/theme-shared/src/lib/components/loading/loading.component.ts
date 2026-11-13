@@ -1,10 +1,11 @@
-import { Component, OnInit, ViewEncapsulation } from '@angular/core';
+import {Component, ViewEncapsulation, ChangeDetectionStrategy,} from '@angular/core';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-loading',
   template: `
     <div class="abp-loading">
-      <i class="fa fa-spinner fa-pulse abp-spinner"></i>
+      <i class="fa fa-spinner fa-pulse abp-spinner" aria-hidden="true"></i>
     </div>
   `,
   encapsulation: ViewEncapsulation.None,
@@ -32,9 +33,6 @@ import { Component, OnInit, ViewEncapsulation } from '@angular/core';
       }
     `,
   ],
+  imports: [],
 })
-export class LoadingComponent implements OnInit {
-  constructor() {}
-
-  ngOnInit() {}
-}
+export class LoadingComponent {}

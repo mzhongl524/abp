@@ -1,53 +1,88 @@
-﻿using Microsoft.AspNetCore.Http;
+using System;
+using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
-using System;
+using Microsoft.AspNetCore.RequestLocalization;
+using Volo.Abp.Auditing;
 using Volo.Abp.Localization;
 
-namespace Volo.Abp.AspNetCore.Mvc.Localization
+namespace Volo.Abp.AspNetCore.Mvc.Localization;
+
+[Area("Abp")]
+[Route("Abp/Languages/[action]")]
+[DisableAuditing]
+[RemoteService(false)]
+[ApiExplorerSettings(IgnoreApi = true)]
+public class AbpLanguagesController : AbpController
 {
-    [Area("Abp")]
-    [Route("Abp/Languages/[action]")]
-    [RemoteService(false)]
-    [ApiExplorerSettings(IgnoreApi = true)]
-    public class AbpLanguagesController : AbpController
+    protected IQueryStringCultureReplacement QueryStringCultureReplacement { get; }
+
+    public AbpLanguagesController(IQueryStringCultureReplacement queryStringCultureReplacement)
     {
-        [HttpGet]
-        public IActionResult Switch(string culture, string uiCulture = "", string returnUrl = "")
+        QueryStringCultureReplacement = queryStringCultureReplacement;
+    }
+
+    [HttpGet]
+    public virtual async Task<IActionResult> Switch(string culture, string uiCulture = "", string returnUrl = "")
+    {
+        if (!CultureHelper.IsValidCultureCode(culture))
         {
-            if (!CultureHelper.IsValidCultureCode(culture))
-            {
-                throw new AbpException("Unknown language: " + culture + ". It must be a valid culture!");
-            }
-
-            string cookieValue = CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(culture, uiCulture));
-
-            Response.Cookies.Append(CookieRequestCultureProvider.DefaultCookieName, cookieValue, new CookieOptions
-            {
-                Expires = Clock.Now.AddYears(2)
-            });
-
-            if (!string.IsNullOrWhiteSpace(returnUrl))
-            {
-                return Redirect(GetRedirectUrl(returnUrl));
-            }
-
-            return Redirect("/");
+            throw new AbpException("The selected culture is not valid! Make sure you enter a valid culture code.");
         }
 
-        private string GetRedirectUrl(string returnUrl)
+        if (!CultureHelper.IsValidCultureCode(uiCulture))
         {
-            if (returnUrl.IsNullOrEmpty())
-            {
-                return "/";
-            }
-
-            if (Url.IsLocalUrl(returnUrl))
-            {
-                return returnUrl;
-            }
-
-            return "/";
+            throw new AbpException("The selected uiCulture is not valid! Make sure you enter a valid culture code.");
         }
+
+        AbpRequestCultureCookieHelper.SetCultureCookie(
+            HttpContext,
+            new RequestCulture(culture, uiCulture)
+        );
+
+        HttpContext.Items[AbpRequestLocalizationMiddleware.HttpContextItemName] = true;
+
+        var context = new QueryStringCultureReplacementContext(
+            HttpContext,
+            new RequestCulture(culture, uiCulture),
+            returnUrl,
+            GetCurrentCultureFromRequestCookie());
+
+        await QueryStringCultureReplacement.ReplaceAsync(context);
+
+        if (!string.IsNullOrWhiteSpace(context.ReturnUrl))
+        {
+            return Redirect(GetRedirectUrl(context.ReturnUrl));
+        }
+
+        return Redirect("~/");
+    }
+
+    protected virtual string? GetCurrentCultureFromRequestCookie()
+    {
+        var cookieValue = HttpContext.Request.Cookies[CookieRequestCultureProvider.DefaultCookieName];
+        if (cookieValue == null)
+        {
+            return null;
+        }
+
+        var result = CookieRequestCultureProvider.ParseCookieValue(cookieValue);
+        return result?.Cultures.FirstOrDefault().Value;
+    }
+
+    protected virtual string GetRedirectUrl(string returnUrl)
+    {
+        if (returnUrl.IsNullOrEmpty())
+        {
+            return "~/";
+        }
+
+        if (Url.IsLocalUrl(returnUrl))
+        {
+            return returnUrl;
+        }
+
+        return "~/";
     }
 }

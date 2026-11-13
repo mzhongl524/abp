@@ -1,2 +1,6 @@
+export * from './ellipsis.directive';
 export * from './loading.directive';
-export * from './table-sort.directive';
+export * from './ngx-datatable-default.directive';
+export * from './ngx-datatable-list.directive';
+export * from './visible.directive';
+export * from './disabled.directive';

@@ -1,11 +1,13 @@
 ﻿using Volo.Abp.Application;
 using Volo.Abp.Modularity;
+using Volo.Docs.Common;
 
 namespace Volo.Docs
 {
     [DependsOn(
         typeof(DocsDomainSharedModule),
-        typeof(AbpDddApplicationModule)
+        typeof(DocsCommonApplicationContractsModule),
+        typeof(AbpDddApplicationContractsModule)
         )]
     public class DocsApplicationContractsModule : AbpModule
     {

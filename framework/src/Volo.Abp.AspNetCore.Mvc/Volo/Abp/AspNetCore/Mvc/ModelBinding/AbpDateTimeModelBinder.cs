@@ -2,48 +2,57 @@
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Binders;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Volo.Abp.Timing;
 
-namespace Volo.Abp.AspNetCore.Mvc.ModelBinding
+namespace Volo.Abp.AspNetCore.Mvc.ModelBinding;
+
+public class AbpDateTimeModelBinder : IModelBinder
 {
-    public class AbpDateTimeModelBinder : IModelBinder
+    private readonly ILogger<AbpDateTimeModelBinder> _logger;
+    private readonly DateTimeModelBinder _dateTimeModelBinder;
+    private readonly IClock _clock;
+    private readonly ICurrentTimezoneProvider _currentTimezoneProvider;
+    private readonly ITimezoneProvider _timezoneProvider;
+
+    public AbpDateTimeModelBinder(
+        ILogger<AbpDateTimeModelBinder> logger,
+        DateTimeModelBinder dateTimeModelBinder,
+        IClock clock,
+        ICurrentTimezoneProvider currentTimezoneProvider,
+        ITimezoneProvider timezoneProvider)
     {
-        private readonly Type _type;
-        private readonly SimpleTypeModelBinder _simpleTypeModelBinder;
-        private readonly IClock _clock;
+        _logger = logger;
+        _dateTimeModelBinder = dateTimeModelBinder;
+        _clock = clock;
+        _currentTimezoneProvider = currentTimezoneProvider;
+        _timezoneProvider = timezoneProvider;
+    }
 
-        public AbpDateTimeModelBinder(ModelBinderProviderContext context)
+    public async Task BindModelAsync(ModelBindingContext bindingContext)
+    {
+        await _dateTimeModelBinder.BindModelAsync(bindingContext);
+
+        if (!bindingContext.Result.IsModelSet || bindingContext.Result.Model is not DateTime dateTime)
         {
-            _type = context.Metadata.ModelType;
-            _clock = context.Services.GetRequiredService<IClock>();
-            _simpleTypeModelBinder = new SimpleTypeModelBinder(context.Metadata.ModelType,
-                context.Services.GetRequiredService<ILoggerFactory>());
+            return;
         }
 
-        public async Task BindModelAsync(ModelBindingContext bindingContext)
+        if (dateTime.Kind == DateTimeKind.Unspecified &&
+            _clock.SupportsMultipleTimezone &&
+            !_currentTimezoneProvider.TimeZone.IsNullOrWhiteSpace())
         {
-            await _simpleTypeModelBinder.BindModelAsync(bindingContext);
-
-            if (!bindingContext.Result.IsModelSet)
+            var timeZone = _currentTimezoneProvider.TimeZone;
+            try
             {
-                return;
+                dateTime = _timezoneProvider.ConvertUnspecifiedToUtc(dateTime, timeZone);
             }
-
-            if (_type == typeof(DateTime))
+            catch
             {
-                var dateTime = (DateTime) bindingContext.Result.Model;
-                bindingContext.Result = ModelBindingResult.Success(_clock.Normalize(dateTime));
-            }
-            else
-            {
-                var dateTime = (DateTime?) bindingContext.Result.Model;
-                if (dateTime != null)
-                {
-                    bindingContext.Result = ModelBindingResult.Success(_clock.Normalize(dateTime.Value));
-                }
+                _logger.LogWarning("Could not convert DateTime with unspecified Kind using timezone '{TimeZone}'.", timeZone);
             }
         }
+
+        bindingContext.Result = ModelBindingResult.Success(_clock.Normalize(dateTime));
     }
 }

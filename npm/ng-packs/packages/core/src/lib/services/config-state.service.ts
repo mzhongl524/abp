@@ -1,72 +1,278 @@
-import { Injectable } from '@angular/core';
-import { Store } from '@ngxs/store';
+import { Injectable, inject } from '@angular/core';
+import { Observable, Subject } from 'rxjs';
+import { map, switchMap, take, tap } from 'rxjs/operators';
+import { AbpApplicationConfigurationService } from '../proxy/volo/abp/asp-net-core/mvc/application-configurations/abp-application-configuration.service';
+import { AbpApplicationLocalizationService } from '../proxy/volo/abp/asp-net-core/mvc/application-configurations/abp-application-localization.service';
 import {
-  AddRoute,
-  GetAppConfiguration,
-  PatchRouteByName,
-  SetEnvironment,
-} from '../actions/config.actions';
-import { ConfigState } from '../states';
+  ApplicationConfigurationDto,
+  ApplicationFeatureConfigurationDto,
+  ApplicationGlobalFeatureConfigurationDto,
+} from '../proxy/volo/abp/asp-net-core/mvc/application-configurations/models';
+import { INCUDE_LOCALIZATION_RESOURCES_TOKEN } from '../tokens/include-localization-resources.token';
+import { InternalStore } from '../utils/internal-store-utils';
+import { EnvironmentService } from './environment.service';
 
 @Injectable({
   providedIn: 'root',
 })
 export class ConfigStateService {
-  constructor(private store: Store) {}
+  private abpConfigService = inject(AbpApplicationConfigurationService);
+  private abpApplicationLocalizationService = inject(AbpApplicationLocalizationService);
+  private environmentService = inject(EnvironmentService);
+  private readonly includeLocalizationResources = inject(INCUDE_LOCALIZATION_RESOURCES_TOKEN, { optional: true });
 
-  getAll() {
-    return this.store.selectSnapshot(ConfigState.getAll);
+  private updateSubject = new Subject<void>();
+  private readonly store = new InternalStore({} as ApplicationConfigurationDto);
+
+  public uiCultureFromAuthCodeFlow: string;
+
+  setState(config: ApplicationConfigurationDto) {
+    this.store.set(config);
   }
 
-  getApplicationInfo() {
-    return this.store.selectSnapshot(ConfigState.getApplicationInfo);
+  get createOnUpdateStream() {
+    return this.store.sliceUpdate;
+  }
+  constructor() {
+    this.initUpdateStream();
   }
 
-  getOne(...args: Parameters<typeof ConfigState.getOne>) {
-    return this.store.selectSnapshot(ConfigState.getOne(...args));
+  private initUpdateStream() {
+    // A new refresh also cancels the localization request of the previous one, so an older
+    // configuration can't arrive after a newer request started.
+    this.updateSubject
+      .pipe(
+        switchMap(() =>
+          this.abpConfigService
+            .get({
+              includeLocalizationResources: !!this.includeLocalizationResources,
+            })
+            .pipe(switchMap(appState => this.getLocalizationAndCombineWithAppState(appState))),
+        ),
+      )
+      .subscribe(res => this.store.set(res));
   }
 
-  getDeep(...args: Parameters<typeof ConfigState.getDeep>) {
-    return this.store.selectSnapshot(ConfigState.getDeep(...args));
+  private getLocalizationAndCombineWithAppState(
+    appState: ApplicationConfigurationDto,
+  ): Observable<ApplicationConfigurationDto> {
+    if (!appState.localization.currentCulture.cultureName) {
+      throw new Error('culture name should defined');
+    }
+
+    const cultureName =
+      this.uiCultureFromAuthCodeFlow ?? appState.localization.currentCulture.cultureName;
+
+    return this.getlocalizationResource(cultureName).pipe(
+      map(result => {
+        const envLocalization = this.environmentService.getEnvironment()?.localization;
+        return {
+          ...appState,
+          localization: {
+            ...appState.localization,
+            ...result,
+            defaultResourceName:
+              appState.localization?.defaultResourceName ?? envLocalization?.defaultResourceName,
+          },
+        };
+      }),
+      tap(() => (this.uiCultureFromAuthCodeFlow = undefined)),
+    );
   }
 
-  getRoute(...args: Parameters<typeof ConfigState.getRoute>) {
-    return this.store.selectSnapshot(ConfigState.getRoute(...args));
+  private getlocalizationResource(cultureName: string) {
+    return this.abpApplicationLocalizationService.get({
+      cultureName: cultureName,
+      onlyDynamics: false,
+    });
   }
 
-  getApiUrl(...args: Parameters<typeof ConfigState.getApiUrl>) {
-    return this.store.selectSnapshot(ConfigState.getApiUrl(...args));
+  refreshAppState() {
+    this.updateSubject.next();
+    return this.createOnUpdateStream(state => state).pipe(take(1));
   }
 
-  getSetting(...args: Parameters<typeof ConfigState.getSetting>) {
-    return this.store.selectSnapshot(ConfigState.getSetting(...args));
+  refreshLocalization(lang: string): Observable<null> {
+    if (this.includeLocalizationResources) {
+      return this.refreshAppState().pipe(map(() => null));
+    }
+
+    return this.getlocalizationResource(lang)
+      .pipe(
+        tap(result => {
+          const envLocalization = this.environmentService.getEnvironment()?.localization;
+          this.store.patch({
+            localization: {
+              ...this.store.state.localization,
+              ...result,
+              defaultResourceName:
+                this.store.state.localization?.defaultResourceName ??
+                envLocalization?.defaultResourceName,
+            },
+          });
+        }),
+      )
+      .pipe(map(() => null));
   }
 
-  getSettings(...args: Parameters<typeof ConfigState.getSettings>) {
-    return this.store.selectSnapshot(ConfigState.getSettings(...args));
+  getOne$<K extends keyof ApplicationConfigurationDto>(key: K) {
+    return this.store.sliceState(state => state[key]);
   }
 
-  getGrantedPolicy(...args: Parameters<typeof ConfigState.getGrantedPolicy>) {
-    return this.store.selectSnapshot(ConfigState.getGrantedPolicy(...args));
+  getOne<K extends keyof ApplicationConfigurationDto>(key: K) {
+    return this.store.state[key];
   }
 
-  getLocalization(...args: Parameters<typeof ConfigState.getLocalization>) {
-    return this.store.selectSnapshot(ConfigState.getLocalization(...args));
+  getAll$(): Observable<ApplicationConfigurationDto> {
+    return this.store.sliceState(state => state);
   }
 
-  dispatchGetAppConfiguration() {
-    return this.store.dispatch(new GetAppConfiguration());
+  getAll(): ApplicationConfigurationDto {
+    return this.store.state;
   }
 
-  dispatchPatchRouteByName(...args: ConstructorParameters<typeof PatchRouteByName>) {
-    return this.store.dispatch(new PatchRouteByName(...args));
+  getDeep$(keys: string[] | string): Observable<any> {
+    keys = splitKeys(keys);
+
+    return this.store
+      .sliceState(state => state)
+      .pipe(
+        map(state => {
+          return (keys as string[]).reduce((acc: any, val) => {
+            if (acc) {
+              return acc[val];
+            }
+
+            return undefined;
+          }, state);
+        }),
+      );
   }
 
-  dispatchAddRoute(...args: ConstructorParameters<typeof AddRoute>) {
-    return this.store.dispatch(new AddRoute(...args));
+  getDeep(keys: string[] | string): any {
+    keys = splitKeys(keys);
+
+    return (keys as string[]).reduce((acc: any, val) => {
+      if (acc) {
+        return acc[val];
+      }
+
+      return undefined;
+    }, this.store.state);
   }
 
-  dispatchSetEnvironment(...args: ConstructorParameters<typeof SetEnvironment>) {
-    return this.store.dispatch(new SetEnvironment(...args));
+  getFeature(key: string) {
+    return this.store.state.features?.values?.[key];
   }
+
+  getFeature$(key: string) {
+    return this.store.sliceState(state => state.features?.values?.[key]);
+  }
+
+  getFeatures(keys: string[]) {
+    const { features } = this.store.state;
+    if (!features) return;
+
+    return keys.reduce((acc, key) => ({ ...acc, [key]: features.values[key] }), {});
+  }
+
+  getFeatures$(keys: string[]): Observable<{ [key: string]: string } | undefined> {
+    return this.store.sliceState(({ features }) => {
+      if (!features?.values) return;
+
+      return keys.reduce((acc, key) => ({ ...acc, [key]: features.values[key] }), {});
+    });
+  }
+
+  private isFeatureEnabled(key: string, features: ApplicationFeatureConfigurationDto) {
+    return features.values[key] === 'true';
+  }
+
+  getFeatureIsEnabled(key: string) {
+    return this.isFeatureEnabled(key, this.store.state.features);
+  }
+
+  getFeatureIsEnabled$(key: string) {
+    return this.store.sliceState(state => this.isFeatureEnabled(key, state.features));
+  }
+
+  getSetting(key: string) {
+    return this.store.state.setting?.values?.[key];
+  }
+
+  getSetting$(key: string) {
+    return this.store.sliceState(state => state.setting?.values?.[key]);
+  }
+
+  getSettings(keyword?: string) {
+    const settings = this.store.state.setting?.values || {};
+
+    if (!keyword) return settings;
+
+    const keysFound = Object.keys(settings).filter(key => key.indexOf(keyword) > -1);
+
+    return keysFound.reduce(
+      (acc, key) => {
+        acc[key] = settings[key];
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+  }
+
+  getSettings$(keyword?: string) {
+    return this.store
+      .sliceState(state => state.setting?.values)
+      .pipe(
+        map((settings = {}) => {
+          if (!keyword) return settings;
+
+          const keysFound = Object.keys(settings).filter(key => key.indexOf(keyword) > -1);
+
+          return keysFound.reduce(
+            (acc, key) => {
+              acc[key] = settings[key];
+              return acc;
+            },
+            {} as Record<string, string>,
+          );
+        }),
+      );
+  }
+
+  getGlobalFeatures() {
+    return this.store.state.globalFeatures;
+  }
+
+  getGlobalFeatures$() {
+    return this.store.sliceState(state => state.globalFeatures);
+  }
+
+  private isGlobalFeatureEnabled(
+    key: string,
+    globalFeatures: ApplicationGlobalFeatureConfigurationDto,
+  ) {
+    const features = globalFeatures.enabledFeatures || [];
+    return features.some(f => key === f);
+  }
+
+  getGlobalFeatureIsEnabled(key: string) {
+    return this.isGlobalFeatureEnabled(key, this.store.state.globalFeatures);
+  }
+
+  getGlobalFeatureIsEnabled$(key: string) {
+    return this.store.sliceState(state => this.isGlobalFeatureEnabled(key, state.globalFeatures));
+  }
+}
+
+function splitKeys(keys: string[] | string): string[] {
+  if (typeof keys === 'string') {
+    keys = keys.split('.');
+  }
+
+  if (!Array.isArray(keys)) {
+    throw new Error('The argument must be a dot string or an string array.');
+  }
+
+  return keys;
 }

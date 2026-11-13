@@ -4,8 +4,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using Volo.Abp.BackgroundJobs;
 using Volo.Abp.BackgroundJobs.DemoApp.Db;
+using Volo.Abp.EntityFrameworkCore;
+
+#nullable disable
 
 namespace Volo.Abp.BackgroundJobs.DemoApp.Migrations
 {
@@ -16,52 +18,77 @@ namespace Volo.Abp.BackgroundJobs.DemoApp.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "2.1.0-rtm-30799")
-                .HasAnnotation("Relational:MaxIdentifierLength", 128)
-                .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
+                .HasAnnotation("_Abp_DatabaseProvider", EfCoreDatabaseProvider.SqlServer)
+                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("Relational:MaxIdentifierLength", 128);
+
+            SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
             modelBuilder.Entity("Volo.Abp.BackgroundJobs.BackgroundJobRecord", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd();
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
 
-                    b.Property<string>("ConcurrencyStamp");
+                    b.Property<string>("ApplicationName")
+                        .HasMaxLength(96)
+                        .HasColumnType("nvarchar(96)");
+
+                    b.Property<DateTime?>("CompletionTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ConcurrencyStamp")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)")
+                        .HasColumnName("ConcurrencyStamp");
 
                     b.Property<DateTime>("CreationTime")
+                        .HasColumnType("datetime2")
                         .HasColumnName("CreationTime");
 
                     b.Property<string>("ExtraProperties")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)")
                         .HasColumnName("ExtraProperties");
 
                     b.Property<bool>("IsAbandoned")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
                         .HasDefaultValue(false);
 
                     b.Property<string>("JobArgs")
                         .IsRequired()
-                        .HasMaxLength(1048576);
+                        .HasMaxLength(1048576)
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("JobName")
                         .IsRequired()
-                        .HasMaxLength(128);
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
-                    b.Property<DateTime?>("LastTryTime");
+                    b.Property<DateTime?>("LastTryTime")
+                        .HasColumnType("datetime2");
 
-                    b.Property<DateTime>("NextTryTime");
+                    b.Property<DateTime>("NextTryTime")
+                        .HasColumnType("datetime2");
 
                     b.Property<byte>("Priority")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint")
                         .HasDefaultValue((byte)15);
 
                     b.Property<short>("TryCount")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("smallint")
                         .HasDefaultValue((short)0);
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IsAbandoned", "NextTryTime");
+                    b.HasIndex("ApplicationName", "CompletionTime", "IsAbandoned", "NextTryTime");
 
-                    b.ToTable("AbpBackgroundJobs");
+                    b.ToTable("AbpBackgroundJobs", (string)null);
                 });
 #pragma warning restore 612, 618
         }

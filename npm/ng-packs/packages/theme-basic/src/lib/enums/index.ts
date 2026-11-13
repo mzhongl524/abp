@@ -1,2 +1,2 @@
 export * from './components';
-export * from './navigation-element-names';
+export * from './user-menu-items';

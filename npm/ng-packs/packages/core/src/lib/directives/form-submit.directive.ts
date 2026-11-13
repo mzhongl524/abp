@@ -2,68 +2,71 @@ import {
   ChangeDetectorRef,
   Directive,
   ElementRef,
-  EventEmitter,
-  Input,
-  OnDestroy,
   OnInit,
-  Output,
-  Self,
+  inject,
+  input,
+  output
 } from '@angular/core';
-import { FormControl, FormGroup, FormGroupDirective } from '@angular/forms';
+import { FormGroupDirective, UntypedFormControl, UntypedFormGroup } from '@angular/forms';
 import { fromEvent } from 'rxjs';
 import { debounceTime, filter } from 'rxjs/operators';
-import { takeUntilDestroy } from '../utils';
+import { SubscriptionService } from '../services/subscription.service';
 
-type Controls = { [key: string]: FormControl } | FormGroup[];
-
+type Controls = { [key: string]: UntypedFormControl } | UntypedFormGroup[];
+/**
+ * @deprecated FormSubmitDirective will be removed in V7.0.0. Use `ngSubmit` instead.
+ */
 @Directive({
-  // tslint:disable-next-line: directive-selector
   selector: 'form[ngSubmit][formGroup]',
+  providers: [SubscriptionService],
 })
-export class FormSubmitDirective implements OnInit, OnDestroy {
-  @Input()
-  debounce = 200;
+export class FormSubmitDirective implements OnInit {
+  private formGroupDirective = inject(FormGroupDirective, { self: true });
+  private host = inject<ElementRef<HTMLFormElement>>(ElementRef);
+  private cdRef = inject(ChangeDetectorRef);
+  private subscription = inject(SubscriptionService);
 
-  @Input()
-  notValidateOnSubmit: string | boolean;
+  readonly debounce = input(200);
 
-  @Output() readonly ngSubmit = new EventEmitter();
+  // TODO: Remove unused input
+  readonly notValidateOnSubmit = input<string | boolean>(undefined);
+
+  readonly markAsDirtyWhenSubmit = input(true);
+
+  readonly ngSubmit = output();
 
   executedNgSubmit = false;
 
-  constructor(
-    @Self() private formGroupDirective: FormGroupDirective,
-    private host: ElementRef<HTMLFormElement>,
-    private cdRef: ChangeDetectorRef,
-  ) {}
-
   ngOnInit() {
-    this.formGroupDirective.ngSubmit.pipe(takeUntilDestroy(this)).subscribe(() => {
-      this.markAsDirty();
+    this.subscription.addOne(this.formGroupDirective.ngSubmit, () => {
+      if (this.markAsDirtyWhenSubmit()) {
+        this.markAsDirty();
+      }
+
       this.executedNgSubmit = true;
     });
 
-    fromEvent(this.host.nativeElement as HTMLElement, 'keyup')
-      .pipe(
-        debounceTime(this.debounce),
-        filter((key: KeyboardEvent) => key && key.key === 'Enter'),
-        takeUntilDestroy(this),
-      )
-      .subscribe(() => {
-        if (!this.executedNgSubmit) {
-          this.host.nativeElement.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        }
+    const keyup$ = fromEvent<KeyboardEvent>(this.host.nativeElement as HTMLElement, 'keyup').pipe(
+      debounceTime(this.debounce()),
+      filter(event => !(event.target instanceof HTMLTextAreaElement)),
+      filter(event => event && event.key === 'Enter'),
+    );
 
-        this.executedNgSubmit = false;
-      });
+    this.subscription.addOne(keyup$, () => {
+      if (!this.executedNgSubmit) {
+        this.host.nativeElement.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        );
+      }
+
+      this.executedNgSubmit = false;
+    });
   }
-
-  ngOnDestroy(): void {}
 
   markAsDirty() {
     const { form } = this.formGroupDirective;
 
-    setDirty(form.controls as { [key: string]: FormControl });
+    setDirty(form.controls as { [key: string]: UntypedFormControl });
     form.markAsDirty();
 
     this.cdRef.detectChanges();
@@ -73,7 +76,7 @@ export class FormSubmitDirective implements OnInit, OnDestroy {
 function setDirty(controls: Controls) {
   if (Array.isArray(controls)) {
     controls.forEach(group => {
-      setDirty(group.controls as { [key: string]: FormControl });
+      setDirty(group.controls as { [key: string]: UntypedFormControl });
     });
     return;
   }

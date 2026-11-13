@@ -1,7 +1,3 @@
-/**
- * TODO: Document & prepare typescript definitions
- * TODO: Refactor & test more
- */
 var abp = abp || {};
 
 $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only for the form we are working on! Also this should be decided by the form itself!
@@ -12,7 +8,7 @@ $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only f
 
     abp.ModalManager = (function () {
 
-        var CallbackList = function () { //TODO: To a seperated file
+        var CallbackList = function () {
             var _callbacks = [];
 
             return {
@@ -43,7 +39,7 @@ $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only f
             var _$modal = null;
             var _$form = null;
 
-            var _modalId = 'Modal_' + (Math.floor((Math.random() * 1000000))) + new Date().getTime();
+            var _modalId = 'Abp_Modal_' + (Math.floor((Math.random() * 1000000))) + new Date().getTime();
             var _modalObject = null;
 
             var _publicApi = null;
@@ -59,7 +55,13 @@ $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only f
 
             function _createContainer() {
                 _removeContainer();
-                _$modalContainer = $('<div id="' + _modalId + 'Container' + '"></div>').appendTo('body');
+                _$modalContainer = $('<div id="' + _modalId + '"></div>');
+                var existsModals = $('[id^="Abp_Modal_"]');
+                if (existsModals.length) {
+                    existsModals.last().after(_$modalContainer)
+                } else {
+                    $('body').prepend(_$modalContainer);
+                }
                 return _$modalContainer;
             }
 
@@ -67,12 +69,11 @@ $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only f
                 _$modal = _$modalContainer.find('.modal');
                 _$form = _$modalContainer.find('form');
                 if (_$form.length) {
-                    //TODO: data-ajaxForm comparison seems wrong!
-                    if (_$form.attr('data-ajaxForm') === undefined || _$form.attr('data-ajaxForm') === false) {
+                    if (_$form.attr('data-ajaxForm') !== 'false') {
                         _$form.abpAjaxForm();
                     }
 
-                    if (_$form.attr('data-check-form-on-close') === undefined || _$form.attr('data-check-form-on-close') != 'false') {
+                    if (_$form.attr('data-check-form-on-close') !== 'false') {
                         _$form.needConfirmationOnUnsavedClose(_$modal);
                     }
 
@@ -95,21 +96,44 @@ $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only f
                 });
 
                 _$modal.on('shown.bs.modal', function () {
-                    //focuses first element if it's a typeable input.
-                    var $firstVisibleInput = _$modal.find('input:not([type=hidden]):first');
-
-                    _onOpenCallbacks.triggerAll(_publicApi);
-
-                    if ($firstVisibleInput.hasClass("datepicker")) {
-                        return; //don't pop-up date pickers...
+                    var modalBackdrop = $('.modal-backdrop').last();
+                    if (modalBackdrop) {
+                        var zIndex = parseInt(_$modal.css('z-index'));
+                        if (!isNaN(zIndex)) {
+                            modalBackdrop.css("z-index", zIndex - 1);
+                        }
                     }
 
-                    var focusableInputs = ["text", "password", "email", "number", "search", "tel", "url"];
-                    if (!focusableInputs.includes($firstVisibleInput.prop("type"))) {
-                        return;
+                    var focusElement = null;
+                    if (!options.focusElement) {
+                        //focuses first element if it's a typeable input.
+                        var $firstVisibleInput = _$modal.find('input:not([type=hidden]):first');
+
+                        _onOpenCallbacks.triggerAll(_publicApi);
+
+                        if ($firstVisibleInput.data("datepicker") || $firstVisibleInput.data("daterangepicker")) {
+                            return; //don't pop-up date pickers...
+                        }
+
+                        var focusableInputs = ["text", "password", "email", "number", "search", "tel", "url"];
+                        if (!focusableInputs.includes($firstVisibleInput.prop("type"))) {
+                            return;
+                        }
+
+                        $firstVisibleInput.focus();
+                        focusElement = $firstVisibleInput;
+                    } else if (typeof options.focusElement === 'function') {
+                        focusElement = options.focusElement();
+                        focusElement.focus();
+                    } else if (typeof options.focusElement === 'string') {
+                        focusElement = $(options.focusElement);
+                        focusElement.focus();
                     }
 
-                    $firstVisibleInput.focus();
+                    if (focusElement && $(focusElement).is('input')) {
+                         var value = focusElement.val();
+                        focusElement[0].setSelectionRange(value.length, value.length);
+                    }
                 });
 
                 var modalClass = abp.modals[options.modalClass];
@@ -119,6 +143,12 @@ $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only f
                     _modalObject.initModal && _modalObject.initModal(_publicApi, _args);
                 }
 
+                var modalCount = $('.modal').length;
+                var zIndex = parseInt(_$modal.css('z-index'));
+                if (!isNaN(zIndex)) {
+                    _$modal.css("z-index", zIndex + modalCount - 1);
+                }
+
                 _$modal.modal('show');
             };
 
@@ -126,10 +156,18 @@ $.validator.defaults.ignore = ''; //TODO: Would be better if we can apply only f
 
                 _args = args || {};
 
+                var argsWithoutFunc = {};
+                for (var a in _args) {
+                    if (_args.hasOwnProperty(a) && typeof _args[a] !== 'function') {
+                        argsWithoutFunc[a] = _args[a];
+                    }
+                }
+
                 _createContainer(_modalId)
-                    .load(options.viewUrl, $.param(_args), function (response, status, xhr) {
+                    .load(options.viewUrl, $.param(argsWithoutFunc), function (response, status, xhr) {
                         if (status === "error") {
-                            //TODO: Handle!
+                            var responseJSON = xhr.responseJSON ? xhr.responseJSON : JSON.parse(xhr.responseText);
+                            abp.ajax.showError(responseJSON.error ? responseJSON.error : abp.ajax.defaultError);
                             return;
                         };
 

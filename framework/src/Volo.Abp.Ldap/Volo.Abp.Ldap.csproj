@@ -4,7 +4,9 @@
   <Import Project="..\..\..\common.props" />
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFrameworks>netstandard2.0;netstandard2.1;net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <WarningsAsErrors>Nullable</WarningsAsErrors>
     <AssemblyName>Volo.Abp.Ldap</AssemblyName>
     <PackageId>Volo.Abp.Ldap</PackageId>
     <AssetTargetFallback>$(AssetTargetFallback);portable-net45+win8+wp8+wpa81;</AssetTargetFallback>
@@ -15,11 +17,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Novell.Directory.Ldap.NETStandard" Version="2.3.8" />
+    <PackageReference Include="LdapForNet" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Volo.Abp.Autofac\Volo.Abp.Autofac.csproj" />
+    <ProjectReference Include="..\Volo.Abp.Ldap.Abstractions\Volo.Abp.Ldap.Abstractions.csproj" />
+    <ProjectReference Include="..\Volo.Abp.Settings\Volo.Abp.Settings.csproj" />
   </ItemGroup>
 
 </Project>

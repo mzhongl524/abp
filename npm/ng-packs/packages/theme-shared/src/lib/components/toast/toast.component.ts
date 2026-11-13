@@ -1,56 +1,73 @@
-import { Component, Input, OnInit } from '@angular/core';
+import {Component, OnInit, input, output, ChangeDetectionStrategy,} from '@angular/core';
 import { Toaster } from '../../models/toaster';
-import { ToasterService } from '../../services/toaster.service';
-import { LocalizationService } from '@abp/ng.core';
-import snq from 'snq';
+import { LocalizationPipe } from '@abp/ng.core';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-toast',
   templateUrl: './toast.component.html',
   styleUrls: ['./toast.component.scss'],
+  host: {
+    '[class.abp-toast-leaving]': 'isLeaving',
+  },
+  imports: [LocalizationPipe],
 })
 export class ToastComponent implements OnInit {
-  @Input()
-  toast: Toaster.Toast;
+  readonly toast = input.required<Toaster.Toast>();
+
+  readonly remove = output<number>();
 
   get severityClass(): string {
-    if (!this.toast || !this.toast.severity) return '';
-    return `toast-${this.toast.severity}`;
+    const toast = this.toast();
+    if (!toast || !toast.severity) return '';
+    return `abp-toast-${toast.severity}`;
   }
 
   get iconClass(): string {
-    switch (this.toast.severity) {
+    const { iconClass } = this.toast().options || {};
+
+    if (iconClass) {
+      return iconClass;
+    }
+
+    switch (this.toast().severity) {
       case 'success':
-        return 'fa-check-circle';
+        return 'bi-check';
       case 'info':
-        return 'fa-info-circle';
+        return 'bi-info-circle';
       case 'warning':
-        return 'fa-exclamation-triangle';
+        return 'bi-exclamation-triangle';
       case 'error':
-        return 'fa-times-circle';
+        return 'bi-shield-exclamation';
       default:
-        return 'fa-exclamation-circle';
+        return 'bi-exclamation-triangle';
     }
   }
 
-  constructor(
-    private toastService: ToasterService,
-    private localizationService: LocalizationService,
-  ) {}
-
   ngOnInit() {
-    if (snq(() => this.toast.options.sticky)) return;
-    const timeout = snq(() => this.toast.options.life) || 5000;
+    const { sticky, life } = this.toast().options || {};
+
+    if (sticky) return;
+    const timeout = life || 5000;
     setTimeout(() => {
       this.close();
     }, timeout);
   }
 
+  isLeaving = false;
+
   close() {
-    this.toastService.remove(this.toast.options.id);
+    if (this.isLeaving) {
+      return;
+    }
+
+    this.isLeaving = true;
+    setTimeout(() => {
+      this.remove.emit(this.toast().options?.id);
+    }, 450);
   }
 
   tap() {
-    if (this.toast.options && this.toast.options.tapToDismiss) this.close();
+    if (this.toast().options?.tapToDismiss) this.close();
   }
 }

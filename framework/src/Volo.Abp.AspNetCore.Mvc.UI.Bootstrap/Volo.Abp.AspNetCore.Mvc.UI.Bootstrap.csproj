@@ -4,7 +4,9 @@
   <Import Project="..\..\..\common.props" />
 
   <PropertyGroup>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <WarningsAsErrors>Nullable</WarningsAsErrors>
     <AddRazorSupportForMvc>true</AddRazorSupportForMvc>
     <AssemblyName>Volo.Abp.AspNetCore.Mvc.UI.Bootstrap</AssemblyName>
     <PackageId>Volo.Abp.AspNetCore.Mvc.UI.Bootstrap</PackageId>
@@ -12,7 +14,7 @@
     <IsPackable>true</IsPackable>
     <OutputType>Library</OutputType>
   </PropertyGroup>
-  
+
   <ItemGroup>
     <ProjectReference Include="..\Volo.Abp.AspNetCore.Mvc.UI\Volo.Abp.AspNetCore.Mvc.UI.csproj" />
   </ItemGroup>

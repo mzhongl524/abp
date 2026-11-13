@@ -1,51 +1,60 @@
-import { Component, OnInit, TrackByFunction, Input, Renderer2 } from '@angular/core';
-import { Observable } from 'rxjs';
-import { ABP, ConfigState } from '@abp/ng.core';
-import { map } from 'rxjs/operators';
-import { Select } from '@ngxs/store';
+import {
+  ABP,
+  AbpRouteCultureUrlPipe,
+  AsyncLocalizationPipe,
+  LocalizationPipe,
+  PermissionDirective,
+  RoutesService,
+  TreeNode,
+} from '@abp/ng.core';
+import {Component,
+  ElementRef,
+  inject,
+  Renderer2,
+  TrackByFunction,
+  input,
+  viewChildren, ChangeDetectionStrategy,} from '@angular/core';
+import { NgTemplateOutlet, AsyncPipe } from '@angular/common';
+import { NgbDropdownModule } from '@ng-bootstrap/ng-bootstrap';
+import { RouterLink } from '@angular/router';
+import { EllipsisDirective } from '@abp/ng.theme.shared';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-routes',
   templateUrl: 'routes.component.html',
+  imports: [
+    NgTemplateOutlet,
+    AsyncPipe,
+    RouterLink,
+    NgbDropdownModule,
+    AsyncLocalizationPipe,
+    PermissionDirective,
+    EllipsisDirective,
+    LocalizationPipe,
+    AbpRouteCultureUrlPipe,
+  ],
 })
 export class RoutesComponent {
-  @Select(ConfigState.getOne('routes'))
-  routes$: Observable<ABP.FullRoute[]>;
+  public readonly routesService = inject(RoutesService);
+  protected renderer = inject(Renderer2);
 
-  @Input()
-  smallScreen: boolean;
+  readonly smallScreen = input<boolean>(undefined);
 
-  @Input()
-  isDropdownChildDynamic: boolean;
+  readonly childrenContainers = viewChildren<ElementRef<HTMLDivElement>>('childrenContainer');
 
-  get visibleRoutes$(): Observable<ABP.FullRoute[]> {
-    return this.routes$.pipe(map(routes => getVisibleRoutes(routes)));
+  rootDropdownExpand = {} as { [key: string]: boolean };
+
+  trackByFn: TrackByFunction<TreeNode<ABP.Route>> = (_, item) => item.name;
+
+  isDropdown(node: TreeNode<ABP.Route>) {
+    return !node?.isLeaf || this.routesService.hasChildren(node.name);
   }
 
-  trackByFn: TrackByFunction<ABP.FullRoute> = (_, item) => item.name;
-
-  constructor(private renderer: Renderer2) {}
-
-  openChange(event: boolean, childrenContainer: HTMLDivElement) {
-    if (!event) {
-      Object.keys(childrenContainer.style)
-        .filter(key => Number.isInteger(+key))
-        .forEach(key => {
-          this.renderer.removeStyle(childrenContainer, childrenContainer.style[key]);
-        });
-      this.renderer.removeStyle(childrenContainer, 'left');
-    }
+  closeDropdown() {
+    this.childrenContainers().forEach(({ nativeElement }) => {
+      this.renderer.addClass(nativeElement, 'd-none');
+      setTimeout(() => this.renderer.removeClass(nativeElement, 'd-none'), 0);
+    });
   }
-}
-
-function getVisibleRoutes(routes: ABP.FullRoute[]) {
-  return routes.reduce((acc, val) => {
-    if (val.invisible) return acc;
-
-    if (val.children && val.children.length) {
-      val.children = getVisibleRoutes(val.children);
-    }
-
-    return [...acc, val];
-  }, []);
 }

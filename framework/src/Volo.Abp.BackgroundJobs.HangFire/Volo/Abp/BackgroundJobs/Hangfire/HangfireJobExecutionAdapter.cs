@@ -1,33 +1,46 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Threading;
+using System.Threading.Tasks;
+using Hangfire;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Volo.Abp.Threading;
 
-namespace Volo.Abp.BackgroundJobs.Hangfire
+namespace Volo.Abp.BackgroundJobs.Hangfire;
+
+public class HangfireJobExecutionAdapter<TArgs>
 {
-    public class HangfireJobExecutionAdapter<TArgs>
-    {
-        protected AbpBackgroundJobOptions Options { get; }
-        protected IServiceScopeFactory ServiceScopeFactory { get; }
-        protected IBackgroundJobExecuter JobExecuter { get; }
+    protected AbpBackgroundJobOptions Options { get; }
+    protected IServiceScopeFactory ServiceScopeFactory { get; }
+    protected IBackgroundJobExecuter JobExecuter { get; }
 
-        public HangfireJobExecutionAdapter(
-            IOptions<AbpBackgroundJobOptions> options, 
-            IBackgroundJobExecuter jobExecuter, 
-            IServiceScopeFactory serviceScopeFactory)
+    public HangfireJobExecutionAdapter(
+        IOptions<AbpBackgroundJobOptions> options,
+        IBackgroundJobExecuter jobExecuter,
+        IServiceScopeFactory serviceScopeFactory)
+    {
+        JobExecuter = jobExecuter;
+        ServiceScopeFactory = serviceScopeFactory;
+        Options = options.Value;
+    }
+
+    [Queue("{0}")]
+    public async Task ExecuteAsync(string queue, TArgs args, CancellationToken cancellationToken = default)
+    {
+        if (!Options.IsJobExecutionEnabled)
         {
-            JobExecuter = jobExecuter;
-            ServiceScopeFactory = serviceScopeFactory;
-            Options = options.Value;
+            throw new AbpException(
+                "Background job execution is disabled. " +
+                "This method should not be called! " +
+                "If you want to enable the background job execution, " +
+                $"set {nameof(AbpBackgroundJobOptions)}.{nameof(AbpBackgroundJobOptions.IsJobExecutionEnabled)} to true! " +
+                "If you've intentionally disabled job execution and this seems a bug, please report it."
+            );
         }
 
-        public void Execute(TArgs args)
+        using (var scope = ServiceScopeFactory.CreateScope())
         {
-            using (var scope = ServiceScopeFactory.CreateScope())
-            {
-                var jobType = Options.GetJob(typeof(TArgs)).JobType;
-                var context = new JobExecutionContext(scope.ServiceProvider, jobType, args);
-                AsyncHelper.RunSync(() => JobExecuter.ExecuteAsync(context));
-            }
+            var jobType = Options.GetJob(typeof(TArgs)).JobType;
+            var context = new JobExecutionContext(scope.ServiceProvider, jobType, args!, cancellationToken: cancellationToken);
+            await JobExecuter.ExecuteAsync(context);
         }
     }
 }

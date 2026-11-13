@@ -1,65 +1,56 @@
-﻿using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Storage;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Volo.Abp;
+using Volo.Abp.Data;
 using Volo.Abp.EntityFrameworkCore;
+using Volo.Abp.EntityFrameworkCore.Sqlite;
 using Volo.Abp.Identity.EntityFrameworkCore;
 using Volo.Abp.IdentityServer.EntityFrameworkCore;
 using Volo.Abp.Modularity;
+using Volo.Abp.PermissionManagement.EntityFrameworkCore;
 using Volo.Abp.Threading;
+using Volo.Abp.Uow;
 
-namespace Volo.Abp.IdentityServer
+namespace Volo.Abp.IdentityServer;
+
+[DependsOn(
+    typeof(AbpIdentityEntityFrameworkCoreModule),
+    typeof(AbpIdentityServerEntityFrameworkCoreModule),
+    typeof(AbpIdentityServerTestBaseModule),
+    typeof(AbpEntityFrameworkCoreSqliteModule),
+    typeof(AbpPermissionManagementEntityFrameworkCoreModule)
+    )]
+public class AbpIdentityServerTestEntityFrameworkCoreModule : AbpModule
 {
-    [DependsOn(
-        typeof(AbpIdentityEntityFrameworkCoreModule),
-        typeof(AbpIdentityServerEntityFrameworkCoreModule),
-        typeof(AbpIdentityServerTestBaseModule)
-        )]
-    public class AbpIdentityServerTestEntityFrameworkCoreModule : AbpModule
+    private AbpUnitTestSqliteDatabase _database;
+
+    public override void ConfigureServices(ServiceConfigurationContext context)
     {
-        public override void ConfigureServices(ServiceConfigurationContext context)
-        {
-            var sqliteConnection = CreateDatabaseAndGetConnection();
+        _database = new AbpUnitTestSqliteDatabase();
+        _database.CreateTables(
+            new IdentityDbContext(new DbContextOptionsBuilder<IdentityDbContext>().UseSqlite(_database.ConnectionString).Options),
+            new IdentityServerDbContext(new DbContextOptionsBuilder<IdentityServerDbContext>().UseSqlite(_database.ConnectionString).Options),
+            new PermissionManagementDbContext(new DbContextOptionsBuilder<PermissionManagementDbContext>().UseSqlite(_database.ConnectionString).Options));
 
-            Configure<AbpDbContextOptions>(options =>
+        Configure<AbpDbConnectionOptions>(options =>
+        {
+            options.ConnectionStrings.Default = _database.ConnectionString;
+        });
+
+        Configure<AbpDbContextOptions>(options =>
+        {
+            options.Configure(abpDbContextConfigurationContext =>
             {
-                options.Configure(abpDbContextConfigurationContext =>
-                {
-                    abpDbContextConfigurationContext.DbContextOptions.UseSqlite(sqliteConnection);
-                });
+                abpDbContextConfigurationContext.UseSqlite();
             });
-        }
+        });
 
-        public override void OnApplicationInitialization(ApplicationInitializationContext context)
-        {
-            SeedTestData(context);
-        }
-
-        private static SqliteConnection CreateDatabaseAndGetConnection()
-        {
-            var connection = new SqliteConnection("Data Source=:memory:");
-            connection.Open();
-
-            new IdentityDbContext(
-                new DbContextOptionsBuilder<IdentityDbContext>().UseSqlite(connection).Options
-            ).GetService<IRelationalDatabaseCreator>().CreateTables();
-
-            new IdentityServerDbContext(
-                new DbContextOptionsBuilder<IdentityServerDbContext>().UseSqlite(connection).Options
-            ).GetService<IRelationalDatabaseCreator>().CreateTables();
-
-            return connection;
-        }
-
-        private static void SeedTestData(ApplicationInitializationContext context)
-        {
-            using (var scope = context.ServiceProvider.CreateScope())
-            {
-                AsyncHelper.RunSync(() => scope.ServiceProvider
-                    .GetRequiredService<AbpIdentityServerTestDataBuilder>()
-                    .BuildAsync());
-            }
-        }
+        context.Services.AddAlwaysDisableUnitOfWorkTransaction();
     }
+
+    public override void OnApplicationShutdown(ApplicationShutdownContext context)
+    {
+        _database?.Dispose();
+    }
+
 }

@@ -1,41 +1,50 @@
-﻿using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Storage;
+﻿using Microsoft.EntityFrameworkCore;
+using Volo.Abp;
+using Volo.Abp.Data;
 using Volo.Abp.EntityFrameworkCore;
+using Volo.Abp.EntityFrameworkCore.Sqlite;
 using Volo.Abp.Modularity;
 
 namespace Volo.Docs.EntityFrameworkCore
 {
     [DependsOn(
         typeof(DocsTestBaseModule),
-        typeof(DocsEntityFrameworkCoreModule)
+        typeof(DocsEntityFrameworkCoreModule),
+        typeof(AbpEntityFrameworkCoreSqliteModule)
         )]
     public class DocsEntityFrameworkCoreTestModule : AbpModule
     {
+        private AbpUnitTestSqliteDatabase _database;
+
+        public override void PreConfigureServices(ServiceConfigurationContext context)
+        {
+            PreConfigure<AbpSqliteOptions>(x => x.BusyTimeout = null);
+        }
+
         public override void ConfigureServices(ServiceConfigurationContext context)
         {
-            var sqliteConnection = CreateDatabaseAndGetConnection();
+            _database = new AbpUnitTestSqliteDatabase();
+            _database.CreateTables(
+                new DocsDbContext(new DbContextOptionsBuilder<DocsDbContext>().UseSqlite(_database.ConnectionString).Options));
+
+            Configure<AbpDbConnectionOptions>(options =>
+            {
+                options.ConnectionStrings.Default = _database.ConnectionString;
+            });
 
             Configure<AbpDbContextOptions>(options =>
             {
                 options.Configure(abpDbContextConfigurationContext =>
                 {
-                    abpDbContextConfigurationContext.DbContextOptions.UseSqlite(sqliteConnection);
+                    abpDbContextConfigurationContext.UseSqlite();
                 });
             });
         }
-        
-        private static SqliteConnection CreateDatabaseAndGetConnection()
-        {
-            var connection = new SqliteConnection("Data Source=:memory:");
-            connection.Open();
 
-            new DocsDbContext(
-                new DbContextOptionsBuilder<DocsDbContext>().UseSqlite(connection).Options
-            ).GetService<IRelationalDatabaseCreator>().CreateTables();
-            
-            return connection;
+        public override void OnApplicationShutdown(ApplicationShutdownContext context)
+        {
+            _database?.Dispose();
         }
+
     }
 }

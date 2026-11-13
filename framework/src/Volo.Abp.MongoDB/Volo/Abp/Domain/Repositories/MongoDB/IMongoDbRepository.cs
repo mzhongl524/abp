@@ -1,22 +1,38 @@
-﻿using MongoDB.Driver;
-using MongoDB.Driver.Linq;
+﻿using System;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using MongoDB.Driver;
 using Volo.Abp.Domain.Entities;
 
-namespace Volo.Abp.Domain.Repositories.MongoDB
+namespace Volo.Abp.Domain.Repositories.MongoDB;
+
+public interface IMongoDbRepository<TEntity> : IRepository<TEntity>
+    where TEntity : class, IEntity
 {
-    public interface IMongoDbRepository<TEntity> : IRepository<TEntity>
-        where TEntity : class, IEntity
-    {
-        IMongoDatabase Database { get; }
+    [Obsolete("Use GetDatabaseAsync method.")]
+    IMongoDatabase Database { get; }
 
-        IMongoCollection<TEntity> Collection { get; }
+    Task<IMongoDatabase> GetDatabaseAsync(CancellationToken cancellationToken = default);
 
-        IMongoQueryable<TEntity> GetMongoQueryable();
-    }
+    [Obsolete("Use GetCollectionAsync method.")]
+    IMongoCollection<TEntity> Collection { get; }
 
-    public interface IMongoDbRepository<TEntity, TKey> : IMongoDbRepository<TEntity>, IRepository<TEntity, TKey>
-        where TEntity : class, IEntity<TKey>
-    {
+    Task<IMongoCollection<TEntity>> GetCollectionAsync(CancellationToken cancellationToken = default);
 
-    }
+    [Obsolete("Use GetQueryable method.")]
+    IQueryable<TEntity> GetMongoQueryable();
+
+    [Obsolete("Use GetQueryableAsync method.")]
+    Task<IQueryable<TEntity>> GetMongoQueryableAsync(CancellationToken cancellationToken = default, AggregateOptions? options = null);
+
+    Task<IQueryable<TEntity>> GetQueryableAsync(CancellationToken cancellationToken = default, AggregateOptions? options = null);
+
+    Task<IAggregateFluent<TEntity>> GetAggregateAsync(CancellationToken cancellationToken = default, AggregateOptions? options = null);
+}
+
+public interface IMongoDbRepository<TEntity, TKey> : IMongoDbRepository<TEntity>, IRepository<TEntity, TKey>
+    where TEntity : class, IEntity<TKey>
+{
+
 }

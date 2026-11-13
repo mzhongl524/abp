@@ -1,91 +1,118 @@
-import { Config, takeUntilDestroy } from '@abp/ng.core';
-import {
-  AfterViewInit,
-  ApplicationRef,
+import {ApplicationRef,
   Component,
-  ComponentFactoryResolver,
+  inject,
+  OnInit,
   ElementRef,
   EmbeddedViewRef,
-  Injector,
-  OnDestroy,
-  OnInit,
   Type,
-  ViewChild,
-} from '@angular/core';
+  AfterViewInit,
+  OnDestroy,
+  createComponent,
+  EnvironmentInjector,
+  DestroyRef,
+  viewChild, ChangeDetectionStrategy,} from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { DOCUMENT } from '@angular/common';
+import { Router } from '@angular/router';
 import { fromEvent, Subject } from 'rxjs';
 import { debounceTime, filter } from 'rxjs/operators';
-import snq from 'snq';
+import { LocalizationParam, LocalizationPipe } from '@abp/ng.core';
+import { ErrorScreenErrorCodes } from '../../models';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-http-error-wrapper',
   templateUrl: './http-error-wrapper.component.html',
   styleUrls: ['http-error-wrapper.component.scss'],
+  imports: [LocalizationPipe],
 })
-export class HttpErrorWrapperComponent implements AfterViewInit, OnDestroy, OnInit {
-  appRef: ApplicationRef;
+export class HttpErrorWrapperComponent implements OnInit, AfterViewInit, OnDestroy {
+  protected readonly destroyRef = inject(DestroyRef);
+  protected readonly document = inject(DOCUMENT);
+  protected readonly window = this.document.defaultView;
+  protected readonly router = inject(Router);
 
-  cfRes: ComponentFactoryResolver;
+  appRef!: ApplicationRef;
 
-  injector: Injector;
+  environmentInjector!: EnvironmentInjector;
 
-  status = 0;
+  status: ErrorScreenErrorCodes = 0;
 
-  title: Config.LocalizationParam = 'Oops!';
+  title: LocalizationParam = '_::Oops!';
 
-  details: Config.LocalizationParam = 'Sorry, an error has occured.';
+  details: LocalizationParam = '_::Sorry, an error has occured.';
 
-  customComponent: Type<any> = null;
+  customComponent: Type<any> | undefined = undefined;
 
-  destroy$: Subject<void>;
+  destroy$!: Subject<void>;
 
   hideCloseIcon = false;
 
-  backgroundColor: string;
+  backgroundColor!: string;
 
   isHomeShow = true;
 
-  @ViewChild('container', { static: false })
-  containerRef: ElementRef<HTMLDivElement>;
+  readonly containerRef = viewChild<ElementRef<HTMLDivElement>>('container');
 
   get statusText(): string {
     return this.status ? `[${this.status}]` : '';
   }
 
-  ngOnInit() {
-    this.backgroundColor =
-      snq(() => window.getComputedStyle(document.body).getPropertyValue('background-color')) ||
-      '#fff';
+  ngOnInit(): void {
+    const computedStyle = this.window.getComputedStyle(this.document.body);
+    const backgroundColor = computedStyle?.getPropertyValue('background-color');
+    this.backgroundColor = backgroundColor || '#fff';
   }
 
-  ngAfterViewInit() {
+  ngAfterViewInit(): void {
     if (this.customComponent) {
-      const customComponentRef = this.cfRes
-        .resolveComponentFactory(this.customComponent)
-        .create(this.injector);
+      const customComponentRef = createComponent(this.customComponent, {
+        environmentInjector: this.environmentInjector,
+      });
+
       customComponentRef.instance.errorStatus = this.status;
+
+      //In our custom "HttpErrorComponent", we have a "status" property.
+      //We used to have "errorStatus", but it wasn't signal type. "status" variable is signal type.
+      //I've checked because of backward compatibility. Developers might have their own custom HttpErrorComponent.
+      //We need to deprecated and remove "errorStatus" in the future.
+      if (customComponentRef.instance.status) {
+        customComponentRef.instance.status.set(this.status);
+      }
+
       customComponentRef.instance.destroy$ = this.destroy$;
+
       this.appRef.attachView(customComponentRef.hostView);
-      this.containerRef.nativeElement.appendChild(
-        (customComponentRef.hostView as EmbeddedViewRef<any>).rootNodes[0],
-      );
+
+      const containerRef = this.containerRef();
+      if (containerRef) {
+        containerRef.nativeElement.appendChild(
+          (customComponentRef.hostView as EmbeddedViewRef<any>).rootNodes[0],
+        );
+      }
       customComponentRef.changeDetectorRef.detectChanges();
     }
 
-    fromEvent(document, 'keyup')
+    fromEvent<KeyboardEvent>(this.document, 'keyup')
       .pipe(
-        takeUntilDestroy(this),
         debounceTime(150),
         filter((key: KeyboardEvent) => key && key.key === 'Escape'),
+        takeUntilDestroyed(this.destroyRef),
       )
-      .subscribe(() => {
-        this.destroy();
-      });
+      .subscribe(() => this.destroy());
   }
 
-  ngOnDestroy() {}
+  goHome(): void {
+    this.router.navigateByUrl('/', { onSameUrlNavigation: 'reload' });
+    this.destroy();
+  }
 
-  destroy() {
+  destroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  ngOnDestroy(): void {
+    this.destroy();
   }
 }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Volo.Abp.Application.Dtos;
 using Volo.Abp.Application.Services;
@@ -7,7 +8,7 @@ namespace Volo.Blogging.Posts
 {
     public interface IPostAppService : IApplicationService
     {
-        Task<ListResultDto<PostWithDetailsDto>> GetListByBlogIdAndTagName(Guid blogId, string tagName);
+        Task<ListResultDto<PostWithDetailsDto>> GetListByBlogIdAndTagNameAsync(Guid blogId, string tagName);
 
         Task<ListResultDto<PostWithDetailsDto>> GetTimeOrderedListAsync(Guid blogId);
 
@@ -20,5 +21,9 @@ namespace Volo.Blogging.Posts
         Task<PostWithDetailsDto> CreateAsync(CreatePostDto input);
 
         Task<PostWithDetailsDto> UpdateAsync(Guid id, UpdatePostDto input);
+        
+        Task<List<PostWithDetailsDto>> GetListByUserIdAsync(Guid userId);
+        
+        Task<List<PostWithDetailsDto>> GetLatestBlogPostsAsync(Guid blogId, int count);
     }
 }

@@ -2,26 +2,27 @@
 using Volo.Abp.Data;
 using Volo.Abp.Modularity;
 using Volo.Abp.PermissionManagement.MongoDB;
+using Volo.Abp.Uow;
 
-namespace Volo.Abp.Identity.MongoDB
+namespace Volo.Abp.Identity.MongoDB;
+
+[DependsOn(
+    typeof(AbpIdentityTestBaseModule),
+    typeof(AbpPermissionManagementMongoDbModule),
+    typeof(AbpIdentityMongoDbModule)
+)]
+public class AbpIdentityMongoDbTestModule : AbpModule
 {
-    [DependsOn(
-        typeof(AbpIdentityTestBaseModule),
-        typeof(AbpPermissionManagementMongoDbModule),
-        typeof(AbpIdentityMongoDbModule)
-        )]
-    public class AbpIdentityMongoDbTestModule : AbpModule
+    public override void ConfigureServices(ServiceConfigurationContext context)
     {
-        public override void ConfigureServices(ServiceConfigurationContext context)
+        Configure<AbpDbConnectionOptions>(options =>
         {
-            var connectionString = MongoDbFixture.ConnectionString.EnsureEndsWith('/') +
-                                   "Db_" +
-                                    Guid.NewGuid().ToString("N");
+            options.ConnectionStrings.Default = MongoDbFixture.GetRandomConnectionString();
+        });
 
-            Configure<AbpDbConnectionOptions>(options =>
-            {
-                options.ConnectionStrings.Default = connectionString;
-            });
-        }
+        Configure<AbpUnitOfWorkDefaultOptions>(options =>
+        {
+            options.TransactionBehavior = UnitOfWorkTransactionBehavior.Disabled;
+        });
     }
 }

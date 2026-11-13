@@ -1,29 +1,39 @@
 ﻿using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Volo.Abp.Domain;
+using Volo.Abp.Domain.Entities.Events.Distributed;
+using Volo.Abp.EntityFrameworkCore.DistributedEvents;
 using Volo.Abp.Modularity;
 using Volo.Abp.Uow.EntityFrameworkCore;
 
-namespace Volo.Abp.EntityFrameworkCore
-{
-    [DependsOn(typeof(AbpDddDomainModule))]
-    public class AbpEntityFrameworkCoreModule : AbpModule
-    {
-        public override void ConfigureServices(ServiceConfigurationContext context)
-        {
-            Configure<AbpDbContextOptions>(options =>
-            {
-                options.PreConfigure(abpDbContextConfigurationContext =>
-                {
-                    abpDbContextConfigurationContext.DbContextOptions
-                        .ConfigureWarnings(warnings =>
-                        {
-                            warnings.Ignore(CoreEventId.LazyLoadOnDisposedContextWarning);
-                        });
-                });
-            });
+namespace Volo.Abp.EntityFrameworkCore;
 
-            context.Services.TryAddTransient(typeof(IDbContextProvider<>), typeof(UnitOfWorkDbContextProvider<>));
-        }
+[DependsOn(typeof(AbpDddDomainModule))]
+public class AbpEntityFrameworkCoreModule : AbpModule
+{
+    public override void ConfigureServices(ServiceConfigurationContext context)
+    {
+        Configure<AbpDbContextOptions>(options =>
+        {
+            options.PreConfigure(abpDbContextConfigurationContext =>
+            {
+                abpDbContextConfigurationContext.DbContextOptions
+                    .ConfigureWarnings(warnings =>
+                    {
+                        warnings.Ignore(CoreEventId.LazyLoadOnDisposedContextWarning);
+                    });
+            });
+        });
+
+        context.Services.TryAddTransient(typeof(IDbContextProvider<>), typeof(UnitOfWorkDbContextProvider<>));
+        context.Services.AddTransient(typeof(IDbContextEventOutbox<>), typeof(DbContextEventOutbox<>));
+        context.Services.AddTransient(typeof(IDbContextEventInbox<>), typeof(DbContextEventInbox<>));
+
+        Configure<AbpDistributedEntityEventOptions>(options =>
+        {
+            options.IgnoredEventSelectors.Add<OutgoingEventRecord>();
+            options.IgnoredEventSelectors.Add<IncomingEventRecord>();
+        });
     }
 }

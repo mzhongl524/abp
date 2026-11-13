@@ -1,32 +1,31 @@
+import {ChangeDetectorRef, Component, inject, input, ChangeDetectionStrategy,} from '@angular/core';
 import { ControlValueAccessor } from '@angular/forms';
-import { ChangeDetectorRef, Component, Injector, Input } from '@angular/core';
 
 // Not an abstract class on purpose. Do not change!
-// tslint:disable-next-line: use-component-selector
-@Component({ template: '' })
+@Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: '',
+})
 export class AbstractNgModelComponent<T = any, U = T> implements ControlValueAccessor {
-  protected _value: T;
-  protected cdRef: ChangeDetectorRef;
-  onChange: (value: T) => {};
-  onTouched: () => {};
+  protected _value!: T;
+  protected cdRef = inject(ChangeDetectorRef);
+  onChange?: (value: T) => void;
+  onTouched?: () => void;
 
-  @Input()
-  disabled: boolean;
+  // Note: disabled needs to remain as a regular property because setDisabledState assigns to it
+  disabled?: boolean;
 
-  @Input()
-  readonly: boolean;
+  readonly readonly = input<boolean | undefined>(undefined);
 
-  @Input()
-  valueFn: (value: U, previousValue?: T) => T = value => (value as any) as T;
+  readonly valueFn = input<(value: U, previousValue?: T) => T>(value => value as any as T);
 
-  @Input()
-  valueLimitFn: (value: T, previousValue?: T) => any = value => false;
+  readonly valueLimitFn = input<(value: T, previousValue?: T) => any>(value => false);
 
-  @Input()
+  // Note: value needs getter/setter for ControlValueAccessor and two-way binding
   set value(value: T) {
-    value = this.valueFn((value as any) as U, this._value);
+    value = this.valueFn()(value as any as U, this._value);
 
-    if (this.valueLimitFn(value, this._value) !== false || this.readonly) return;
+    if (this.valueLimitFn()(value, this._value) !== false || this.readonly()) return;
 
     this._value = value;
     this.notifyValueChange();
@@ -40,11 +39,6 @@ export class AbstractNgModelComponent<T = any, U = T> implements ControlValueAcc
     return this._value;
   }
 
-  constructor(public injector: Injector) {
-    // tslint:disable-next-line: deprecation
-    this.cdRef = injector.get(ChangeDetectorRef);
-  }
-
   notifyValueChange(): void {
     if (this.onChange) {
       this.onChange(this.value);
@@ -52,8 +46,8 @@ export class AbstractNgModelComponent<T = any, U = T> implements ControlValueAcc
   }
 
   writeValue(value: T): void {
-    this._value = this.valueLimitFn(value, this._value) || value;
-    setTimeout(() => this.cdRef.markForCheck(), 0);
+    this._value = this.valueLimitFn()(value, this._value) || value;
+    this.cdRef.markForCheck();
   }
 
   registerOnChange(fn: any): void {

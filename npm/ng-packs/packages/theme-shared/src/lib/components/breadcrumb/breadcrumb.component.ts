@@ -1,54 +1,59 @@
-import { Component, OnInit, Input } from '@angular/core';
+import {
+  ABP,
+  RouteBasedCultureUrlService,
+  RouterEvents,
+  RoutesService,
+  SubscriptionService,
+  TreeNode,
+} from '@abp/ng.core';
+import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { Store } from '@ngxs/store';
-import { ConfigState, ABP } from '@abp/ng.core';
+import { map, startWith } from 'rxjs/operators';
+import { eThemeSharedRouteNames } from '../../enums/route-names';
+import { BreadcrumbItemsComponent } from '../breadcrumb-items/breadcrumb-items.component';
 
 @Component({
   selector: 'abp-breadcrumb',
   templateUrl: './breadcrumb.component.html',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  providers: [SubscriptionService],
+  imports: [BreadcrumbItemsComponent],
 })
 export class BreadcrumbComponent implements OnInit {
-  @Input()
-  segments: string[] = [];
+  private router = inject(Router);
+  private routes = inject(RoutesService);
+  private subscription = inject(SubscriptionService);
+  private routerEvents = inject(RouterEvents);
+  private routeCultureUrl = inject(RouteBasedCultureUrlService);
 
-  show: boolean;
-
-  constructor(private router: Router, private store: Store) {}
+  readonly segments = signal<Partial<ABP.Route>[]>([]);
 
   ngOnInit(): void {
-    this.show = !!this.store.selectSnapshot(state => state.LeptonLayoutState);
+    this.subscription.addOne(
+      this.routerEvents.getNavigationEvents('End').pipe(
+        startWith(null),
+        map(() =>
+          this.routes.search({ path: this.routeCultureUrl.getRoutePathForMatching(this.router) }),
+        ),
+      ),
+      route => {
+        const next: Partial<ABP.Route>[] = [];
+        if (route) {
+          let node = { parent: route } as TreeNode<ABP.Route>;
 
-    if (this.show && !this.segments.length) {
-      let splittedUrl = this.router.url.split('/').filter(chunk => chunk);
-
-      let currentUrl: ABP.FullRoute = this.store.selectSnapshot(
-        ConfigState.getRoute(splittedUrl[0]),
-      );
-
-      if (!currentUrl) {
-        currentUrl = this.store.selectSnapshot(ConfigState.getRoute(null, null, this.router.url));
-        splittedUrl = [this.router.url];
-        if (!currentUrl) {
-          this.show = false;
-          return;
+          while (node.parent) {
+            node = node.parent;
+            const { parent, children, isLeaf, ...segment } = node;
+            if (!isAdministration(segment)) next.unshift(segment);
+          }
         }
-      }
 
-      this.segments.push(currentUrl.name);
-
-      if (splittedUrl.length > 1) {
-        const [, ...arr] = splittedUrl;
-
-        let childRoute: ABP.FullRoute = currentUrl;
-        for (let i = 0; i < arr.length; i++) {
-          const element = arr[i];
-          if (!childRoute.children || !childRoute.children.length) return;
-
-          childRoute = childRoute.children.find(child => child.path === element);
-
-          this.segments.push(childRoute.name);
-        }
-      }
-    }
+        this.segments.set(next);
+      },
+    );
   }
+}
+
+function isAdministration(route: Pick<ABP.Route, 'name'>) {
+  return route.name === eThemeSharedRouteNames.Administration;
 }

@@ -1,39 +1,44 @@
-import { Component, OnDestroy, OnInit, Type } from '@angular/core';
+import { Component, OnInit, Type, inject, ChangeDetectionStrategy, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { Store } from '@ngxs/store';
 import { distinctUntilChanged } from 'rxjs/operators';
-import { ABP } from '../models/common';
 import { ReplaceableComponents } from '../models/replaceable-components';
-import { ReplaceableComponentsState } from '../states/replaceable-components.state';
-import { takeUntilDestroy } from '../utils/rxjs-utils';
+import { ReplaceableComponentsService } from '../services/replaceable-components.service';
+import { SubscriptionService } from '../services/subscription.service';
+import { NgComponentOutlet } from '@angular/common';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.OnPush,
   selector: 'abp-replaceable-route-container',
-  template: `
-    <ng-container *ngComponentOutlet="externalComponent || defaultComponent"></ng-container>
-  `,
+  template: ` <ng-container *ngComponentOutlet="externalComponent() || defaultComponent" /> `,
+  providers: [SubscriptionService],
+  imports: [NgComponentOutlet],
 })
-export class ReplaceableRouteContainerComponent implements OnInit, OnDestroy {
-  defaultComponent: Type<any>;
+export class ReplaceableRouteContainerComponent implements OnInit {
+  private route = inject(ActivatedRoute);
+  private replaceableComponents = inject(ReplaceableComponentsService);
+  private subscription = inject(SubscriptionService);
 
-  componentKey: string;
+  defaultComponent!: Type<any>;
 
-  externalComponent: Type<any>;
+  componentKey!: string;
 
-  constructor(private route: ActivatedRoute, private store: Store) {}
+  readonly externalComponent = signal<Type<any> | undefined>(undefined);
 
   ngOnInit() {
     this.defaultComponent = this.route.snapshot.data.replaceableComponent.defaultComponent;
-    this.componentKey = (this.route.snapshot.data
-      .replaceableComponent as ReplaceableComponents.RouteData).key;
+    this.componentKey = (
+      this.route.snapshot.data.replaceableComponent as ReplaceableComponents.RouteData
+    ).key;
 
-    this.store
-      .select(ReplaceableComponentsState.getComponent(this.componentKey))
-      .pipe(takeUntilDestroy(this), distinctUntilChanged())
-      .subscribe((res = {} as ReplaceableComponents.ReplaceableComponent) => {
-        this.externalComponent = res.component;
-      });
+    const component$ = this.replaceableComponents
+      .get$(this.componentKey)
+      .pipe(distinctUntilChanged());
+
+    this.subscription.addOne(
+      component$,
+      (res = {} as ReplaceableComponents.ReplaceableComponent) => {
+        this.externalComponent.set(res.component);
+      },
+    );
   }
-
-  ngOnDestroy() {}
 }

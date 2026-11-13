@@ -1,25 +1,21 @@
 ﻿using System;
 using Volo.Abp.Data;
 using Volo.Abp.Modularity;
+using Volo.Abp.Uow;
 
-namespace Volo.Abp.SettingManagement.MongoDB
+namespace Volo.Abp.SettingManagement.MongoDB;
+
+[DependsOn(
+    typeof(AbpSettingManagementMongoDbModule),
+    typeof(AbpSettingManagementTestBaseModule)
+    )]
+public class AbpSettingManagementMongoDbTestModule : AbpModule
 {
-    [DependsOn(
-        typeof(AbpSettingManagementMongoDbModule),
-        typeof(AbpSettingManagementTestBaseModule)
-        )]
-    public class AbpSettingManagementMongoDbTestModule : AbpModule
+    public override void ConfigureServices(ServiceConfigurationContext context)
     {
-        public override void ConfigureServices(ServiceConfigurationContext context)
+        Configure<AbpDbConnectionOptions>(options =>
         {
-            var connectionString = MongoDbFixture.ConnectionString.EnsureEndsWith('/') +
-                                   "Db_" +
-                                    Guid.NewGuid().ToString("N");
-
-            Configure<AbpDbConnectionOptions>(options =>
-            {
-                options.ConnectionStrings.Default = connectionString;
-            });
-        }
+            options.ConnectionStrings.Default = MongoDbFixture.GetRandomConnectionString();
+        });
     }
 }

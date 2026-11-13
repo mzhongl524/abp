@@ -2,7 +2,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using Swashbuckle.AspNetCore.Swagger;
 using Volo.Abp;
 using Volo.Abp.Account.Web;
@@ -32,8 +32,15 @@ using Localization.Resources.AbpUi;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
 using Volo.Abp.Account;
+using Volo.Abp.BackgroundJobs;
+using Volo.Abp.BlobStoring;
+using Volo.Abp.BlobStoring.Database;
+using Volo.Abp.PermissionManagement.HttpApi;
 using Volo.Abp.Validation.Localization;
 using Volo.Docs.Documents.FullSearch.Elastic;
+using Volo.Abp.Caching.StackExchangeRedis;
+using Volo.Docs.Common.Documents;
+using Volo.Docs.Projects.Pdf;
 
 namespace VoloDocs.Web
 {
@@ -41,16 +48,23 @@ namespace VoloDocs.Web
         typeof(DocsWebModule),
         typeof(DocsAdminWebModule),
         typeof(DocsApplicationModule),
+        typeof(DocsHttpApiModule),
         typeof(DocsAdminApplicationModule),
+        typeof(DocsAdminHttpApiModule),
         typeof(VoloDocsEntityFrameworkCoreModule),
         typeof(AbpAutofacModule),
         typeof(AbpAccountWebModule),
         typeof(AbpAccountApplicationModule),
+        typeof(AbpAccountHttpApiModule),
         typeof(AbpIdentityWebModule),
         typeof(AbpIdentityApplicationModule),
+        typeof(AbpIdentityHttpApiModule),
         typeof(AbpPermissionManagementDomainIdentityModule),
         typeof(AbpPermissionManagementApplicationModule),
+        typeof(AbpPermissionManagementHttpApiModule),
         typeof(AbpAspNetCoreMvcUiBasicThemeModule)
+        ,typeof(AbpCachingStackExchangeRedisModule),
+        typeof(AbpBackgroundJobsModule)
     )]
     public class VoloDocsWebModule : AbpModule
     {
@@ -58,7 +72,16 @@ namespace VoloDocs.Web
         {
             PreConfigure<AbpMvcDataAnnotationsLocalizationOptions>(options =>
             {
-                options.AddAssemblyResource(typeof(DocsResource), typeof(VoloDocsWebModule).Assembly);
+                options.AddAssemblyResource(
+                    typeof(DocsResource), 
+                    typeof(VoloDocsWebModule).Assembly, 
+                    typeof(DocsAdminApplicationModule).Assembly
+                );
+            });
+            
+            PreConfigure<AbpBackgroundJobWorkerOptions>(options =>
+            {
+                options.ApplicationName = context.Services.GetApplicationName()!;
             });
         }
 
@@ -67,14 +90,17 @@ namespace VoloDocs.Web
             var hostingEnvironment = context.Services.GetHostingEnvironment();
             var configuration = context.Services.GetConfiguration();
 
-            Configure<DocsUiOptions>(options =>
-            {
-                options.RoutePrefix = null;
-            });
-
+            // Configure<DocsUiOptions>(options =>
+            // {
+            //     options.RoutePrefix = null;
+            //     options.SingleProjectMode.Enable = true;
+            //     options.SingleProjectMode.ProjectName = "abp";
+            //     options.MultiLanguageMode = false;
+            // });
+            
             Configure<DocsElasticSearchOptions>(options =>
             {
-                options.Enable = true;
+                options.Enable = false;
             });
 
             Configure<AbpDbConnectionOptions>(options =>
@@ -95,7 +121,7 @@ namespace VoloDocs.Web
                     options.FileSets.ReplaceEmbeddedByPhysical<AbpAspNetCoreMvcUiModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}..{0}..{0}framework{0}src{0}Volo.Abp.AspNetCore.Mvc.UI", Path.DirectorySeparatorChar)));
                     options.FileSets.ReplaceEmbeddedByPhysical<AbpAspNetCoreMvcUiBootstrapModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}..{0}..{0}framework{0}src{0}Volo.Abp.AspNetCore.Mvc.UI.Bootstrap", Path.DirectorySeparatorChar)));
                     options.FileSets.ReplaceEmbeddedByPhysical<AbpAspNetCoreMvcUiThemeSharedModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}..{0}..{0}framework{0}src{0}Volo.Abp.AspNetCore.Mvc.UI.Theme.Shared", Path.DirectorySeparatorChar)));
-                    options.FileSets.ReplaceEmbeddedByPhysical<AbpAspNetCoreMvcUiBasicThemeModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}..{0}..{0}framework{0}src{0}Volo.Abp.AspNetCore.Mvc.UI.Theme.Basic", Path.DirectorySeparatorChar)));
+                    options.FileSets.ReplaceEmbeddedByPhysical<AbpAspNetCoreMvcUiBasicThemeModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}..{0}..{0}modules{0}basic-theme{0}src{0}Volo.Abp.AspNetCore.Mvc.UI.Theme.Basic", Path.DirectorySeparatorChar)));
                     options.FileSets.ReplaceEmbeddedByPhysical<DocsDomainModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}src{0}Volo.Docs.Domain", Path.DirectorySeparatorChar)));
                     options.FileSets.ReplaceEmbeddedByPhysical<DocsWebModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}src{0}Volo.Docs.Web", Path.DirectorySeparatorChar)));
                     options.FileSets.ReplaceEmbeddedByPhysical<DocsWebModule>(Path.Combine(hostingEnvironment.ContentRootPath, string.Format("..{0}..{0}src{0}Volo.Docs.Admin.Web", Path.DirectorySeparatorChar)));
@@ -113,7 +139,7 @@ namespace VoloDocs.Web
                     options.DocInclusionPredicate((docName, description) => true);
                     options.CustomSchemaIds(type => type.FullName);
                 });
-            
+
             Configure<AbpVirtualFileSystemOptions>(options =>
             {
                 options.FileSets.AddEmbedded<VoloDocsWebModule>("VoloDocs.Web");
@@ -123,8 +149,19 @@ namespace VoloDocs.Web
             {
                 options.Languages.Add(new LanguageInfo("cs", "cs", "Čeština"));
                 options.Languages.Add(new LanguageInfo("en", "en", "English"));
+                options.Languages.Add(new LanguageInfo("pt", "pt", "Português"));
+                options.Languages.Add(new LanguageInfo("pt-BR", "pt-BR", "Português (Brasil)"));
+                options.Languages.Add(new LanguageInfo("fi", "fi", "Finnish"));
+                options.Languages.Add(new LanguageInfo("fr", "fr", "Français"));
+                options.Languages.Add(new LanguageInfo("hi", "hi", "Hindi"));
+                options.Languages.Add(new LanguageInfo("is", "is", "Icelandic"));
+                options.Languages.Add(new LanguageInfo("it", "it", "Italiano"));
+                options.Languages.Add(new LanguageInfo("hu", "hu", "Magyar"));
+                options.Languages.Add(new LanguageInfo("ro-RO", "ro-RO", "Română"));
+                options.Languages.Add(new LanguageInfo("sk", "sk", "Slovak"));
                 options.Languages.Add(new LanguageInfo("tr", "tr", "Türkçe"));
                 options.Languages.Add(new LanguageInfo("zh-Hans", "zh-Hans", "简体中文"));
+                options.Languages.Add(new LanguageInfo("el", "el", "Ελληνικά"));
 
                 options.Resources
                     .Get<DocsResource>()
@@ -142,6 +179,29 @@ namespace VoloDocs.Web
             {
                 options.Conventions.AddPageRoute("/Error", "error/{statusCode}");
             });
+
+            Configure<DocsWebGoogleOptions>(options =>
+            {
+                options.EnableGoogleTranslate = true;
+                options.EnableGoogleProgrammableSearchEngine = true;
+                options.GoogleSearchEngineId = "77c7266532da1427f";
+            });
+            
+            Configure<DocsProjectPdfGeneratorOptions>(options =>
+            {
+                options.BaseUrl = configuration["App:SelfUrl"];
+                options.IndexPagePath = "index.md";
+                options.CalculatePdfFileTitle = project => project.ShortName == "abp" ? "ABP Documentation" : null;
+                options.DocumentContentNormalizer = content => content.Replace("<i class=\"fa fa-minus text-secondary\"></i>", "No").Replace("<i class=\"fa fa-check text-success\"></i>", "Yes");
+            });
+            
+            Configure<AbpBlobStoringOptions>(options =>
+            {
+                options.Containers.ConfigureDefault(container =>
+                {
+                    container.UseDatabase();
+                });
+            });
         }
 
         public override void OnApplicationInitialization(ApplicationInitializationContext context)
@@ -149,14 +209,12 @@ namespace VoloDocs.Web
             var app = context.GetApplicationBuilder();
             var env = context.GetEnvironment();
 
-            app.UseVirtualFiles();
             app.UseRouting();
-
+            app.MapAbpStaticAssets();
             app.UseAuthentication();
             app.UseAuthorization();
-
             app.UseAbpRequestLocalization();
-
+            app.UseAbpSecurityHeaders();
             app.UseSwagger();
             app.UseSwaggerUI(options =>
             {
@@ -164,7 +222,7 @@ namespace VoloDocs.Web
             });
 
             app.UseStatusCodePagesWithReExecute("/error/{0}");
-           
+
             //app.UseMiddleware<GlobalExceptionHandlerMiddleware>();
 
             app.UseConfiguredEndpoints();

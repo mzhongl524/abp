@@ -1,285 +1,98 @@
-import { Config, RestOccurError } from '@abp/ng.core';
+import { inject, Injectable, Injector } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import {
-  ApplicationRef,
-  ComponentFactoryResolver,
-  ComponentRef,
-  EmbeddedViewRef,
-  Inject,
-  Injectable,
-  Injector,
-  RendererFactory2,
-} from '@angular/core';
-import { Navigate, RouterDataResolved, RouterError, RouterState } from '@ngxs/router-plugin';
-import { Actions, ofActionSuccessful, Store } from '@ngxs/store';
-import { Observable, Subject } from 'rxjs';
-import { filter, map } from 'rxjs/operators';
-import snq from 'snq';
-import { HttpErrorWrapperComponent } from '../components/http-error-wrapper/http-error-wrapper.component';
-import { ErrorScreenErrorCodes, HttpErrorConfig } from '../models/common';
-import { Confirmation } from '../models/confirmation';
-import { ConfirmationService } from '../services/confirmation.service';
+import { Observable, of } from 'rxjs';
+import { filter, switchMap } from 'rxjs/operators';
 
-export const DEFAULT_ERROR_MESSAGES = {
-  defaultError: {
-    title: 'An error has occurred!',
-    details: 'Error detail not sent by server.',
-  },
-  defaultError401: {
-    title: 'You are not authenticated!',
-    details: 'You should be authenticated (sign in) in order to perform this operation.',
-  },
-  defaultError403: {
-    title: 'You are not authorized!',
-    details: 'You are not allowed to perform this operation.',
-  },
-  defaultError404: {
-    title: 'Resource not found!',
-    details: 'The resource requested could not found on the server.',
-  },
-  defaultError500: {
-    title: 'Internal server error',
-    details: 'Error detail not sent by server.',
-  },
-};
+import { HttpErrorReporterService } from '@abp/ng.core';
+
+import { CustomHttpErrorHandlerService } from '../models/common';
+import { Confirmation } from '../models/confirmation';
+
+import { CUSTOM_ERROR_HANDLERS, HTTP_ERROR_HANDLER } from '../tokens/http-error.token';
+import { HTTP_ERROR_CONFIG } from '../tokens/http-error.token';
+import { DEFAULT_ERROR_LOCALIZATIONS, DEFAULT_ERROR_MESSAGES } from '../constants/default-errors';
+
+import { ConfirmationService } from '../services/confirmation.service';
+import { RouterErrorHandlerService } from '../services/router-error-handler.service';
 
 @Injectable({ providedIn: 'root' })
 export class ErrorHandler {
-  componentRef: ComponentRef<HttpErrorWrapperComponent>;
+  protected injector = inject(Injector);
 
-  constructor(
-    private actions: Actions,
-    private store: Store,
-    private confirmationService: ConfirmationService,
-    private appRef: ApplicationRef,
-    private cfRes: ComponentFactoryResolver,
-    private rendererFactory: RendererFactory2,
-    private injector: Injector,
-    @Inject('HTTP_ERROR_CONFIG') private httpErrorConfig: HttpErrorConfig,
-  ) {
+  protected readonly httpErrorReporter = inject(HttpErrorReporterService);
+  protected readonly confirmationService = inject(ConfirmationService);
+  protected readonly routerErrorHandlerService = inject(RouterErrorHandlerService);
+  protected readonly httpErrorConfig = inject(HTTP_ERROR_CONFIG);
+  protected readonly customErrorHandlers = inject(CUSTOM_ERROR_HANDLERS);
+  protected readonly httpErrorHandler = inject(HTTP_ERROR_HANDLER, { optional: true });
+
+  constructor() {
     this.listenToRestError();
     this.listenToRouterError();
-    this.listenToRouterDataResolved();
   }
 
-  private listenToRouterError() {
-    this.actions
-      .pipe(ofActionSuccessful(RouterError), filter(this.filterRouteErrors))
-      .subscribe(() => this.show404Page());
+  protected listenToRouterError() {
+    this.routerErrorHandlerService.listen();
   }
 
-  private listenToRouterDataResolved() {
-    this.actions
-      .pipe(
-        ofActionSuccessful(RouterDataResolved),
-        filter(() => !!this.componentRef),
-      )
-      .subscribe(() => {
-        this.componentRef.destroy();
-        this.componentRef = null;
-      });
+  protected listenToRestError() {
+    this.httpErrorReporter.reporter$
+      .pipe(filter(this.filterRestErrors), switchMap(this.executeErrorHandler))
+      .subscribe(err => this.handleError(err));
   }
 
-  private listenToRestError() {
-    this.actions
-      .pipe(
-        ofActionSuccessful(RestOccurError),
-        map(action => action.payload),
-        filter(this.filterRestErrors),
-      )
-      .subscribe(err => {
-        const body = snq(() => err.error.error, DEFAULT_ERROR_MESSAGES.defaultError.title);
+  protected executeErrorHandler = (error: HttpErrorResponse) => {
+    if (this.httpErrorHandler) {
+      return this.httpErrorHandler(this.injector, error);
+    }
 
-        if (err instanceof HttpErrorResponse && err.headers.get('_AbpErrorFormat')) {
-          const confirmation$ = this.showError(null, null, body);
+    return of(error);
+  };
 
-          if (err.status === 401) {
-            confirmation$.subscribe(() => {
-              this.navigateToLogin();
-            });
-          }
-        } else {
-          switch (err.status) {
-            case 401:
-              this.canCreateCustomError(401)
-                ? this.show401Page()
-                : this.showError(
-                    {
-                      key: 'AbpAccount::DefaultErrorMessage401',
-                      defaultValue: DEFAULT_ERROR_MESSAGES.defaultError401.title,
-                    },
-                    {
-                      key: 'AbpAccount::DefaultErrorMessage401Detail',
-                      defaultValue: DEFAULT_ERROR_MESSAGES.defaultError401.details,
-                    },
-                  ).subscribe(() => this.navigateToLogin());
-              break;
-            case 403:
-              this.createErrorComponent({
-                title: {
-                  key: 'AbpAccount::DefaultErrorMessage403',
-                  defaultValue: DEFAULT_ERROR_MESSAGES.defaultError403.title,
-                },
-                details: {
-                  key: 'AbpAccount::DefaultErrorMessage403Detail',
-                  defaultValue: DEFAULT_ERROR_MESSAGES.defaultError403.details,
-                },
-                status: 403,
-              });
-              break;
-            case 404:
-              this.canCreateCustomError(404)
-                ? this.show404Page()
-                : this.showError(
-                    {
-                      key: 'AbpAccount::DefaultErrorMessage404',
-                      defaultValue: DEFAULT_ERROR_MESSAGES.defaultError404.details,
-                    },
-                    {
-                      key: 'AbpAccount::DefaultErrorMessage404Detail',
-                      defaultValue: DEFAULT_ERROR_MESSAGES.defaultError404.title,
-                    },
-                  );
-              break;
-            case 500:
-              this.createErrorComponent({
-                title: {
-                  key: 'AbpAccount::500Message',
-                  defaultValue: DEFAULT_ERROR_MESSAGES.defaultError500.title,
-                },
-                details: {
-                  key: 'AbpAccount::InternalServerErrorMessage',
-                  defaultValue: DEFAULT_ERROR_MESSAGES.defaultError500.details,
-                },
-                status: 500,
-              });
-              break;
-            case 0:
-              if (err.statusText === 'Unknown Error') {
-                this.createErrorComponent({
-                  title: {
-                    key: 'AbpAccount::DefaultErrorMessage',
-                    defaultValue: DEFAULT_ERROR_MESSAGES.defaultError.title,
-                  },
-                  details: err.message,
-                  isHomeShow: false,
-                });
-              }
-              break;
-            default:
-              this.showError(
-                DEFAULT_ERROR_MESSAGES.defaultError.details,
-                DEFAULT_ERROR_MESSAGES.defaultError.title,
-              );
-              break;
-          }
-        }
-      });
+  protected sortHttpErrorHandlers(
+    a: CustomHttpErrorHandlerService,
+    b: CustomHttpErrorHandlerService,
+  ) {
+    return (b.priority || 0) - (a.priority || 0);
   }
 
-  private show401Page() {
-    this.createErrorComponent({
-      title: {
-        key: 'AbpAccount::401Message',
-        defaultValue: DEFAULT_ERROR_MESSAGES.defaultError401.title,
-      },
-      status: 401,
-    });
-  }
+  protected handleError(err: unknown) {
+    if (this.customErrorHandlers && this.customErrorHandlers.length) {
+      const errorHandlerService = this.customErrorHandlers
+        .sort(this.sortHttpErrorHandlers)
+        .find(service => service.canHandle(err));
 
-  private show404Page() {
-    this.createErrorComponent({
-      title: {
-        key: 'AbpAccount::404Message',
-        defaultValue: DEFAULT_ERROR_MESSAGES.defaultError404.title,
-      },
-      status: 404,
-    });
-  }
-
-  private showError(
-    message?: Config.LocalizationParam,
-    title?: Config.LocalizationParam,
-    body?: any,
-  ): Observable<Confirmation.Status> {
-    if (body) {
-      if (body.details) {
-        message = body.details;
-        title = body.message;
-      } else if (body.message) {
-        title = DEFAULT_ERROR_MESSAGES.defaultError.title;
-        message = body.message;
-      } else {
-        message = body.message || DEFAULT_ERROR_MESSAGES.defaultError.title;
+      if (errorHandlerService) {
+        errorHandlerService.execute();
+        return;
       }
     }
 
+    this.showError().subscribe();
+  }
+
+  protected showError(): Observable<Confirmation.Status> {
+    const title = {
+      key: DEFAULT_ERROR_LOCALIZATIONS.defaultError.title,
+      defaultValue: DEFAULT_ERROR_MESSAGES.defaultError.title,
+    };
+    const message = {
+      key: DEFAULT_ERROR_LOCALIZATIONS.defaultError.details,
+      defaultValue: DEFAULT_ERROR_MESSAGES.defaultError.details,
+    };
     return this.confirmationService.error(message, title, {
       hideCancelBtn: true,
       yesText: 'AbpAccount::Close',
     });
   }
 
-  private navigateToLogin() {
-    this.store.dispatch(
-      new Navigate(['/account/login'], null, {
-        state: { redirectUrl: this.store.selectSnapshot(RouterState.url) },
-      }),
-    );
-  }
-
-  createErrorComponent(instance: Partial<HttpErrorWrapperComponent>) {
-    const renderer = this.rendererFactory.createRenderer(null, null);
-    const host = renderer.selectRootElement(document.body, true);
-
-    this.componentRef = this.cfRes
-      .resolveComponentFactory(HttpErrorWrapperComponent)
-      .create(this.injector);
-
-    for (const key in instance) {
-      /* istanbul ignore else */
-      if (this.componentRef.instance.hasOwnProperty(key)) {
-        this.componentRef.instance[key] = instance[key];
-      }
-    }
-
-    this.componentRef.instance.hideCloseIcon = this.httpErrorConfig.errorScreen.hideCloseIcon;
-    if (this.canCreateCustomError(instance.status as ErrorScreenErrorCodes)) {
-      this.componentRef.instance.cfRes = this.cfRes;
-      this.componentRef.instance.appRef = this.appRef;
-      this.componentRef.instance.injector = this.injector;
-      this.componentRef.instance.customComponent = this.httpErrorConfig.errorScreen.component;
-    }
-
-    this.appRef.attachView(this.componentRef.hostView);
-    renderer.appendChild(host, (this.componentRef.hostView as EmbeddedViewRef<any>).rootNodes[0]);
-
-    const destroy$ = new Subject<void>();
-    this.componentRef.instance.destroy$ = destroy$;
-    destroy$.subscribe(() => {
-      this.componentRef.destroy();
-      this.componentRef = null;
-    });
-  }
-
-  canCreateCustomError(status: ErrorScreenErrorCodes): boolean {
-    return snq(
-      () =>
-        this.httpErrorConfig.errorScreen.component &&
-        this.httpErrorConfig.errorScreen.forWhichErrors.indexOf(status) > -1,
-    );
-  }
-
-  private filterRestErrors = ({ status }: HttpErrorResponse): boolean => {
+  protected filterRestErrors = ({ status }: HttpErrorResponse): boolean => {
     if (typeof status !== 'number') return false;
 
-    return this.httpErrorConfig.skipHandledErrorCodes.findIndex(code => code === status) < 0;
-  };
+    if (!this.httpErrorConfig?.skipHandledErrorCodes) {
+      return true;
+    }
 
-  private filterRouteErrors = (instance: RouterError<any>): boolean => {
-    return (
-      snq(() => instance.event.error.indexOf('Cannot match') > -1) &&
-      this.httpErrorConfig.skipHandledErrorCodes.findIndex(code => code === 404) < 0
-    );
+    return this.httpErrorConfig.skipHandledErrorCodes?.findIndex(code => code === status) < 0;
   };
 }

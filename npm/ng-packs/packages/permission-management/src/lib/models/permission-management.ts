@@ -1,40 +1,9 @@
-import { EventEmitter } from '@angular/core';
+import { GetPermissionListResultDto } from '@abp/ng.permission-management/proxy';
+import { EventEmitter, OutputEmitterRef } from '@angular/core';
 
 export namespace PermissionManagement {
   export interface State {
-    permissionRes: Response;
-  }
-
-  export interface Response {
-    entityDisplayName: string;
-    groups: Group[];
-  }
-
-  export interface Group {
-    name: string;
-    displayName: string;
-    permissions: Permission[];
-  }
-
-  export interface MinimumPermission {
-    name: string;
-    isGranted: boolean;
-  }
-
-  export interface Permission extends MinimumPermission {
-    displayName: string;
-    parentName: string;
-    allowedProviders: string[];
-    grantedProviders: GrantedProvider[];
-  }
-
-  export interface GrantedProvider {
-    providerName: string;
-    providerKey: string;
-  }
-
-  export interface UpdateRequest {
-    permissions: MinimumPermission[];
+    permissionRes: GetPermissionListResultDto;
   }
 
   export interface PermissionManagementComponentInputs {
@@ -45,6 +14,6 @@ export namespace PermissionManagement {
   }
 
   export interface PermissionManagementComponentOutputs {
-    readonly visibleChange: EventEmitter<boolean>;
+    readonly visibleChange: EventEmitter<boolean> | OutputEmitterRef<boolean>;
   }
 }

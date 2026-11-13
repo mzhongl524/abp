@@ -1,4 +1,4 @@
-import { Config } from '@abp/ng.core';
+import { LocalizationParam } from '@abp/ng.core';
 
 export namespace Toaster {
   export interface ToastOptions {
@@ -10,23 +10,47 @@ export namespace Toaster {
     titleLocalizationParams?: string[];
     id: any;
     containerKey?: string;
+    iconClass?: string;
   }
 
   export interface Toast {
-    message: Config.LocalizationParam;
-    title?: Config.LocalizationParam;
+    message: LocalizationParam;
+    title?: LocalizationParam;
     severity?: string;
     options?: ToastOptions;
   }
 
   export type Severity = 'neutral' | 'success' | 'info' | 'warning' | 'error';
+  export type ToasterId = string | number;
 
-  /**
-   * @deprecated Status will be removed from toaster model in v3.0
-   */
-  export enum Status {
-    confirm = 'confirm',
-    reject = 'reject',
-    dismiss = 'dismiss',
+  export interface Service {
+    show: (
+      message: LocalizationParam,
+      title: LocalizationParam,
+      severity: Toaster.Severity,
+      options: Partial<Toaster.ToastOptions>,
+    ) => ToasterId;
+    remove: (id: number) => void;
+    clear: (containerKey?: string) => void;
+    info: (
+      message: LocalizationParam,
+      title?: LocalizationParam,
+      options?: Partial<Toaster.ToastOptions>,
+    ) => ToasterId;
+    success: (
+      message: LocalizationParam,
+      title?: LocalizationParam,
+      options?: Partial<Toaster.ToastOptions>,
+    ) => ToasterId;
+    warn: (
+      message: LocalizationParam,
+      title?: LocalizationParam,
+      options?: Partial<Toaster.ToastOptions>,
+    ) => ToasterId;
+    error: (
+      message: LocalizationParam,
+      title?: LocalizationParam,
+      options?: Partial<Toaster.ToastOptions>,
+    ) => ToasterId;
   }
 }

@@ -1,12 +1,14 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Volo.Abp.Data;
 using Volo.Abp.EntityFrameworkCore;
+using Volo.Abp.MultiTenancy;
 using Volo.Docs.Documents;
 using Volo.Docs.Projects;
 
 namespace Volo.Docs.EntityFrameworkCore
 {
-    [ConnectionStringName(DocsDbProperties.ConnectionStringName)]
+    [IgnoreMultiTenancy]
+    [ConnectionStringName(AbpDocsDbProperties.ConnectionStringName)]
     public class DocsDbContext: AbpDbContext<DocsDbContext>, IDocsDbContext
     {
         public DbSet<Project> Projects { get; set; }
@@ -14,8 +16,10 @@ namespace Volo.Docs.EntityFrameworkCore
         public DbSet<Document> Documents { get; set; }
 
         public DbSet<DocumentContributor> DocumentContributors { get; set; }
+        
+        public DbSet<ProjectPdfFile> ProjectPdfFiles { get; set; }
 
-        public DocsDbContext(DbContextOptions<DocsDbContext> options) 
+        public DocsDbContext(DbContextOptions<DocsDbContext> options)
             : base(options)
         {
 

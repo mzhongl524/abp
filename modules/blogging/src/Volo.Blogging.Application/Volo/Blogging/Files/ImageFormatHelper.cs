@@ -1,23 +1,54 @@
-﻿using System.Collections.Generic;
-using System.Drawing.Imaging;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
+using SkiaSharp;
 
 namespace Volo.Blogging.Areas.Blog.Helpers
 {
     public class ImageFormatHelper
     {
-        public static ImageFormat GetImageRawFormat(byte[] fileBytes)
+        public static SKEncodedImageFormat? GetImageRawFormat(Stream stream)
         {
-            using (var memoryStream = new MemoryStream(fileBytes))
+            // Only the image header is parsed, the pixels are not decoded.
+            // SKCodec.Create(Stream) takes the ownership of the stream and disposes it, so the remaining bytes
+            // are copied to give the codec its own buffer and keep the stream open for the caller.
+            using (var memoryStream = new MemoryStream())
             {
-                return System.Drawing.Image.FromStream(memoryStream).RawFormat;
+                stream.CopyTo(memoryStream);
+
+                using (var data = SKData.CreateCopy(memoryStream.GetBuffer(), (ulong)memoryStream.Length))
+                using (var codec = SKCodec.Create(data))
+                {
+                    return codec?.EncodedFormat;
+                }
             }
         }
 
-        public static bool IsValidImage(byte[] fileBytes, ICollection<ImageFormat> validFormats)
+        public static bool IsValidImage(Stream stream, ICollection<SKEncodedImageFormat> validFormats)
         {
-            var imageFormat = GetImageRawFormat(fileBytes);
-            return validFormats.Contains(imageFormat);
+            return GetValidImageFormat(stream, validFormats).HasValue;
+        }
+
+        public static SKEncodedImageFormat? GetValidImageFormat(Stream stream, ICollection<SKEncodedImageFormat> validFormats)
+        {
+            try
+            {
+                var imageFormat = GetImageRawFormat(stream);
+
+                return imageFormat.HasValue && validFormats.Contains(imageFormat.Value) ? imageFormat : null;
+            }
+            catch (Exception e) when (!IsNativeLibraryException(e))
+            {
+                return null;
+            }
+        }
+
+        private static bool IsNativeLibraryException(Exception e)
+        {
+            return e is DllNotFoundException
+                or EntryPointNotFoundException
+                or BadImageFormatException
+                or TypeInitializationException;
         }
     }
 }
